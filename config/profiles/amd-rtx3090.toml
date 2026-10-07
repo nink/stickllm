@@ -30,10 +30,13 @@ threads = 8
 
 [model]
 # Fits comfortably in 24 GB VRAM with headroom for 8k context.
+# Upstream ships Q5_K_M as two GGUF shards; service points at shard 1.
 filename = "Qwen2.5-7B-Instruct-Q5_K_M.gguf"
-# Hugging Face resolve URL (revision pinned in download script)
 hf_repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
-hf_file = "qwen2.5-7b-instruct-q5_k_m.gguf"
+hf_files = [
+  "qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf",
+  "qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf",
+]
 approx_size_gb = 5.4
 sha256 = ""  # filled by download-model.sh after first fetch
 

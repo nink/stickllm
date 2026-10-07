@@ -13,6 +13,8 @@ cache/
 
 # Models (large; fetched by scripts/download-model.sh)
 models/*.gguf
+models/*.gguf.partial
+models/*.partial
 models/*.bin
 models/*.sha256
 !models/.gitkeep

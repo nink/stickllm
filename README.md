@@ -52,8 +52,8 @@ stickllm/
 ./scripts/build.sh                   # produces out/stickllm-amd-rtx3090.hybrid.iso
 ```
 
-Flash: [docs/FLASH.md](docs/FLASH.md) · Boot: [docs/BOOT.md](docs/BOOT.md) ·
-Hardware: [docs/HARDWARE.md](docs/HARDWARE.md)
+Build details: [docs/BUILD.md](docs/BUILD.md) · Flash: [docs/FLASH.md](docs/FLASH.md) ·
+Boot: [docs/BOOT.md](docs/BOOT.md) · Hardware: [docs/HARDWARE.md](docs/HARDWARE.md)
 
 ## Runtime (on the stick)
 

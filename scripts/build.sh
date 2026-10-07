@@ -7,13 +7,15 @@ cd "$ROOT"
 
 PROFILE="amd-rtx3090"
 ISO_NAME="stickllm-${PROFILE}.hybrid.iso"
-MODEL_NAME="Qwen2.5-7B-Instruct-Q5_K_M.gguf"
+MODEL_SHARD1="qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
+MODEL_SHARD2="qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf"
+MODEL_LINK="Qwen2.5-7B-Instruct-Q5_K_M.gguf"
 
 echo "=== StickLLM build (${PROFILE}) ==="
 ./scripts/verify-host.sh
 
-if [[ ! -f "models/${MODEL_NAME}" ]]; then
-  echo "Model missing — fetching…"
+if [[ ! -f "models/${MODEL_SHARD1}" || ! -f "models/${MODEL_SHARD2}" ]]; then
+  echo "Model shards missing — fetching…"
   ./scripts/download-model.sh
 fi
 
@@ -26,10 +28,14 @@ mkdir -p "$WORK"
 
 echo "Assembling live-build tree…"
 
+# Git Bash on Windows rewrites Unix-style Docker paths; disable conversion.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
 docker run --rm --privileged \
-  -v "$ROOT:/stickllm:ro" \
-  -v "$WORK:/work" \
-  -w /work \
+  -v "${ROOT}:/stickllm:ro" \
+  -v "${WORK}:/work" \
+  -w //work \
   debian:bookworm \
   bash -lc '
     set -euo pipefail
@@ -75,9 +81,11 @@ docker run --rm --privileged \
     mkdir -p config/includes.chroot/opt/stickllm/ui
     rsync -a /stickllm/ui/ config/includes.chroot/opt/stickllm/ui/
 
-    # Model
+    # Model shards (+ stable name symlink target)
     mkdir -p config/includes.chroot/opt/stickllm/models
-    cp /stickllm/models/'"${MODEL_NAME}"' config/includes.chroot/opt/stickllm/models/
+    cp /stickllm/models/'"${MODEL_SHARD1}"' config/includes.chroot/opt/stickllm/models/
+    cp /stickllm/models/'"${MODEL_SHARD2}"' config/includes.chroot/opt/stickllm/models/
+    ln -sf '"${MODEL_SHARD1}"' config/includes.chroot/opt/stickllm/models/'"${MODEL_LINK}"'
 
     # Profile
     mkdir -p config/includes.chroot/etc/stickllm

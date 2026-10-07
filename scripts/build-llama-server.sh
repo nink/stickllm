@@ -16,9 +16,13 @@ fi
 
 echo "Building llama.cpp ${TAG} with CUDA arch 86 (RTX 3090)…"
 
+# Git Bash on Windows rewrites /work → a host path; disable that for Docker.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
 docker run --rm \
-  -v "$ROOT:/work" \
-  -w /work \
+  -v "${ROOT}:/work" \
+  -w //work \
   nvidia/cuda:12.4.1-devel-ubuntu22.04 \
   bash -lc "
     set -euo pipefail

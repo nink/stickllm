@@ -2,14 +2,17 @@
 # Explicit "Download model" — requires network + user confirmation.
 set -euo pipefail
 
-MODEL_NAME="Qwen2.5-7B-Instruct-Q5_K_M.gguf"
-HF_URL="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q5_k_m.gguf"
 DEST_DIR="/opt/stickllm/models"
-DEST="${DEST_DIR}/${MODEL_NAME}"
+BASE_URL="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main"
+SHARDS=(
+  "qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
+  "qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf"
+)
+LINK="${DEST_DIR}/Qwen2.5-7B-Instruct-Q5_K_M.gguf"
 
 echo "StickLLM Download model"
-echo "Source: $HF_URL"
-echo "Dest:   $DEST"
+echo "Source: $BASE_URL (Q5_K_M, 2 shards)"
+echo "Dest:   $DEST_DIR"
 echo
 echo "This writes the GGUF to the live filesystem (RAM) unless persistence is active."
 echo
@@ -26,23 +29,26 @@ if [[ "$(id -u)" -ne 0 ]]; then
 fi
 
 mkdir -p "$DEST_DIR"
-if [[ -f "$DEST" ]]; then
-  echo "Model already present: $DEST"
-  exit 0
-fi
+for f in "${SHARDS[@]}"; do
+  DEST="${DEST_DIR}/${f}"
+  if [[ -f "$DEST" ]]; then
+    echo "Already present: $DEST"
+    continue
+  fi
+  TMP="${DEST}.partial"
+  if command -v curl >/dev/null; then
+    curl -L --fail --progress-bar -o "$TMP" "${BASE_URL}/${f}"
+  elif command -v wget >/dev/null; then
+    wget -O "$TMP" "${BASE_URL}/${f}"
+  else
+    echo "Need curl or wget."
+    exit 1
+  fi
+  mv "$TMP" "$DEST"
+  chmod 644 "$DEST"
+done
 
-TMP="${DEST}.partial"
-if command -v curl >/dev/null; then
-  curl -L --fail --progress-bar -o "$TMP" "$HF_URL"
-elif command -v wget >/dev/null; then
-  wget -O "$TMP" "$HF_URL"
-else
-  echo "Need curl or wget."
-  exit 1
-fi
-
-mv "$TMP" "$DEST"
-chmod 644 "$DEST"
+ln -sf "${SHARDS[0]}" "$LINK"
 systemctl restart stickllm-llama.service || true
 echo "Downloaded. llama-server restart requested."
 stickllm-status
