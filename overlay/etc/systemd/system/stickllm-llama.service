@@ -3,14 +3,14 @@ Description=StickLLM llama.cpp server (local / LAN)
 After=network-online.target nvidia-persistenced.service
 Wants=network-online.target
 ConditionPathExists=/opt/stickllm/bin/llama-server
-ConditionPathExists=/opt/stickllm/models/Qwen2.5-7B-Instruct-Q5_K_M.gguf
+ConditionPathExists=/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf
 
 [Service]
 Type=simple
 EnvironmentFile=-/etc/stickllm/runtime.env
 Environment=LD_LIBRARY_PATH=/opt/stickllm/lib
 ExecStart=/opt/stickllm/bin/llama-server \
-  --model /opt/stickllm/models/Qwen2.5-7B-Instruct-Q5_K_M.gguf \
+  --model /opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf \
   --host 0.0.0.0 \
   --port 8080 \
   --ctx-size 8192 \

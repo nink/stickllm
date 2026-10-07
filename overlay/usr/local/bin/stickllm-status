@@ -20,7 +20,7 @@ else
 fi
 echo
 
-MODEL="/opt/stickllm/models/Qwen2.5-7B-Instruct-Q5_K_M.gguf"
+MODEL="/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
 if [[ -f "$MODEL" ]]; then
   echo "model:    present ($(du -h "$MODEL" | awk '{print $1}'))"
 else

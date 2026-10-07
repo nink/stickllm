@@ -20,6 +20,7 @@ python3
 jq
 iproute2
 iputils-ping
+libgomp1
 firmware-linux
 firmware-linux-nonfree
 firmware-misc-nonfree

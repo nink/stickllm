@@ -24,18 +24,11 @@ for f in "${SHARDS[@]}"; do
   mv "$TMP" "$DEST"
 done
 
-# Convenience symlink / copy name used by services
-PRIMARY="models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
-LINK="models/Qwen2.5-7B-Instruct-Q5_K_M.gguf"
-rm -f "$LINK"
-# Relative symlink so it works inside the live image too
-ln -s "$(basename "$PRIMARY")" "$LINK" 2>/dev/null || cp -f "$PRIMARY" "$LINK"
-
 if command -v sha256sum >/dev/null; then
   sha256sum models/qwen2.5-7b-instruct-q5_k_m-*.gguf | tee models/Qwen2.5-7B-Instruct-Q5_K_M.sha256
 elif command -v shasum >/dev/null; then
   shasum -a 256 models/qwen2.5-7b-instruct-q5_k_m-*.gguf | tee models/Qwen2.5-7B-Instruct-Q5_K_M.sha256
 fi
 
-ls -lh models/*.gguf
-echo "OK — point llama-server at models/Qwen2.5-7B-Instruct-Q5_K_M.gguf (shard 1)"
+ls -lh models/qwen2.5-7b-instruct-q5_k_m-*.gguf
+echo "OK — llama-server uses models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf (auto-loads shard 2)"
