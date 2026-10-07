@@ -1,0 +1,55 @@
+# StickLLM v0.1 — sole supported hardware profile
+# Do not add other GPUs until this profile boots and serves stably.
+
+id = "amd-rtx3090"
+name = "AMD desktop + NVIDIA RTX 3090 (24 GB)"
+version = "0.1.0"
+
+[host]
+cpu_vendor = "amd"
+arch = "x86_64"
+min_ram_gb = 32
+uefi = true
+secure_boot = "must_disable"  # proprietary NVIDIA modules are unsigned for this MVP
+
+[gpu]
+vendor = "nvidia"
+model = "GeForce RTX 3090"
+vram_gb = 24
+min_driver = "535"
+cuda_arch = "sm_86"  # Ampere
+
+[inference]
+engine = "llama.cpp"
+binary = "/opt/stickllm/bin/llama-server"
+host = "0.0.0.0"
+port = 8080
+ctx_size = 8192
+n_gpu_layers = -1  # offload all layers to GPU
+threads = 8
+
+[model]
+# Fits comfortably in 24 GB VRAM with headroom for 8k context.
+filename = "Qwen2.5-7B-Instruct-Q5_K_M.gguf"
+# Hugging Face resolve URL (revision pinned in download script)
+hf_repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
+hf_file = "qwen2.5-7b-instruct-q5_k_m.gguf"
+approx_size_gb = 5.4
+sha256 = ""  # filled by download-model.sh after first fetch
+
+[ui]
+bind = "0.0.0.0"
+port = 80
+path = "/opt/stickllm/ui"
+
+[privacy]
+default_mode = "ephemeral"
+persist_requires_explicit_approval = true
+write_internal_disks = false
+cloud = false
+telemetry = false
+
+[network]
+lan_api = true
+tls = false  # v0.1: HTTP on trusted LAN only
+outbound_required = false

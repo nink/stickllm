@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StickLLM</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">StickLLM</div>
+    <div class="meta">
+      <span id="modeBadge" class="badge">ephemeral</span>
+      <span id="statusLine" class="status">connecting…</span>
+    </div>
+  </header>
+
+  <main id="log" class="log" aria-live="polite"></main>
+
+  <form id="composer" class="composer">
+    <textarea id="input" rows="2" placeholder="Message (stays on this LAN)" autocomplete="off"></textarea>
+    <button type="submit" id="send">Send</button>
+  </form>
+
+  <footer class="foot">
+    Local only · API <code id="apiHint">/v1</code> · reboot clears this session
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

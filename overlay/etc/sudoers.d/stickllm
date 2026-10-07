@@ -1,0 +1,2 @@
+# Live user may run StickLLM explicit-write tools without a password prompt spam.
+user ALL=(root) NOPASSWD: /usr/local/bin/stickllm-persist, /usr/local/bin/stickllm-download-model, /usr/local/bin/stickllm-status

@@ -1,0 +1,49 @@
+#!/bin/bash
+set -euo pipefail
+
+MODE="${STICKLLM_MODE:-ephemeral}"
+if [[ -f /etc/stickllm/runtime.env ]]; then
+  # shellcheck disable=SC1091
+  source /etc/stickllm/runtime.env || true
+  MODE="${STICKLLM_MODE:-$MODE}"
+fi
+
+echo "=== StickLLM status ==="
+echo "mode:     $MODE"
+echo "profile:  amd-rtx3090"
+echo
+
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null || echo "nvidia-smi: error"
+else
+  echo "nvidia-smi: not found"
+fi
+echo
+
+MODEL="/opt/stickllm/models/Qwen2.5-7B-Instruct-Q5_K_M.gguf"
+if [[ -f "$MODEL" ]]; then
+  echo "model:    present ($(du -h "$MODEL" | awk '{print $1}'))"
+else
+  echo "model:    MISSING — run stickllm-download-model (explicit)"
+fi
+
+echo "llama:    $(systemctl is-active stickllm-llama.service 2>/dev/null || echo unknown)"
+echo "ui:       $(systemctl is-active stickllm-ui.service 2>/dev/null || echo unknown)"
+echo
+
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+if [[ -n "${IP:-}" ]]; then
+  echo "Chat UI:  http://${IP}/"
+  echo "API:      http://${IP}:8080/v1/chat/completions"
+else
+  echo "Chat UI:  http://127.0.0.1/"
+  echo "API:      http://127.0.0.1:8080/v1/chat/completions"
+fi
+
+if [[ -d /lib/live/mount/persistence ]] || mount | grep -q persistence; then
+  echo
+  echo "persistence: active (USB data partition)"
+else
+  echo
+  echo "persistence: off (ephemeral — reboot clears session)"
+fi

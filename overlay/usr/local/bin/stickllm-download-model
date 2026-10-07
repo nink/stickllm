@@ -1,0 +1,48 @@
+#!/bin/bash
+# Explicit "Download model" — requires network + user confirmation.
+set -euo pipefail
+
+MODEL_NAME="Qwen2.5-7B-Instruct-Q5_K_M.gguf"
+HF_URL="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q5_k_m.gguf"
+DEST_DIR="/opt/stickllm/models"
+DEST="${DEST_DIR}/${MODEL_NAME}"
+
+echo "StickLLM Download model"
+echo "Source: $HF_URL"
+echo "Dest:   $DEST"
+echo
+echo "This writes the GGUF to the live filesystem (RAM) unless persistence is active."
+echo
+
+if [[ "${1:-}" != "--i-understand" ]]; then
+  echo "Refusing without confirmation."
+  echo "Re-run: sudo stickllm-download-model --i-understand"
+  exit 1
+fi
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "Run as root (sudo)."
+  exit 1
+fi
+
+mkdir -p "$DEST_DIR"
+if [[ -f "$DEST" ]]; then
+  echo "Model already present: $DEST"
+  exit 0
+fi
+
+TMP="${DEST}.partial"
+if command -v curl >/dev/null; then
+  curl -L --fail --progress-bar -o "$TMP" "$HF_URL"
+elif command -v wget >/dev/null; then
+  wget -O "$TMP" "$HF_URL"
+else
+  echo "Need curl or wget."
+  exit 1
+fi
+
+mv "$TMP" "$DEST"
+chmod 644 "$DEST"
+systemctl restart stickllm-llama.service || true
+echo "Downloaded. llama-server restart requested."
+stickllm-status

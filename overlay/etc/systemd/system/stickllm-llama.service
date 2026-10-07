@@ -1,0 +1,29 @@
+[Unit]
+Description=StickLLM llama.cpp server (local / LAN)
+After=network-online.target nvidia-persistenced.service
+Wants=network-online.target
+ConditionPathExists=/opt/stickllm/bin/llama-server
+ConditionPathExists=/opt/stickllm/models/Qwen2.5-7B-Instruct-Q5_K_M.gguf
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/stickllm/runtime.env
+Environment=LD_LIBRARY_PATH=/opt/stickllm/lib
+ExecStart=/opt/stickllm/bin/llama-server \
+  --model /opt/stickllm/models/Qwen2.5-7B-Instruct-Q5_K_M.gguf \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --ctx-size 8192 \
+  --n-gpu-layers 999 \
+  --threads 8 \
+  --metrics
+Restart=on-failure
+RestartSec=5
+# No writes outside runtime dirs
+ReadWritePaths=/tmp /run /var/tmp
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

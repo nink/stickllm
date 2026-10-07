@@ -1,0 +1,34 @@
+# Build artifacts
+out/*
+!out/.gitkeep
+*.iso
+*.img
+*.hybrid.iso
+.cache/
+live-build/work/
+live-build/chroot/
+live-build/binary/
+live-build/.build/
+cache/
+
+# Models (large; fetched by scripts/download-model.sh)
+models/*.gguf
+models/*.bin
+models/*.sha256
+!models/.gitkeep
+
+# Vendor binaries fetched at build time
+overlay/opt/stickllm/bin/llama-server
+overlay/opt/stickllm/lib/
+!overlay/opt/stickllm/lib/.gitkeep
+
+# Local / OS
+.DS_Store
+Thumbs.db
+*.swp
+.env
+.env.*
+*.log
+.venv/
+__pycache__/
+node_modules/

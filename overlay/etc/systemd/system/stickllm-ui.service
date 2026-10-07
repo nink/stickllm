@@ -1,0 +1,17 @@
+[Unit]
+Description=StickLLM local chat UI (HTTP)
+After=network-online.target stickllm-llama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/stickllm/ui
+ExecStart=/usr/bin/python3 -m http.server 80 --bind 0.0.0.0
+Restart=on-failure
+RestartSec=3
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,52 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "[stickllm] chroot hook: setup"
+
+chmod 755 /usr/local/bin/stickllm-status \
+          /usr/local/bin/stickllm-persist \
+          /usr/local/bin/stickllm-download-model || true
+
+if [[ -f /etc/sudoers.d/stickllm ]]; then
+  chmod 440 /etc/sudoers.d/stickllm
+fi
+
+if [[ -x /opt/stickllm/bin/llama-server ]]; then
+  chmod 755 /opt/stickllm/bin/llama-server
+fi
+
+# Prefer NVIDIA proprietary over nouveau
+mkdir -p /etc/modprobe.d
+cat >/etc/modprobe.d/stickllm-nvidia.conf <<'EOF'
+blacklist nouveau
+options nouveau modeset=0
+EOF
+
+# Hostname
+echo "stickllm" > /etc/hostname
+echo "10.0.0.1 stickllm" >> /etc/hosts || true
+
+# Enable services for live boot
+systemctl enable stickllm-llama.service || true
+systemctl enable stickllm-ui.service || true
+systemctl enable NetworkManager.service || true
+systemctl enable nvidia-persistenced.service || true
+
+# Live user convenience (live-config creates user "user")
+if getent passwd user >/dev/null 2>&1; then
+  usermod -aG sudo user || true
+fi
+
+# Motd
+cat >/etc/motd <<'EOF'
+
+  StickLLM v0.1 — local Privacy AI (amd-rtx3090)
+  Ephemeral by default. Run: stickllm-status
+
+EOF
+
+# Ensure model dir exists even if empty (download later)
+mkdir -p /opt/stickllm/models
+mkdir -p /opt/stickllm/ui
+
+echo "[stickllm] chroot hook: done"
