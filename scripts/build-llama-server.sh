@@ -8,7 +8,8 @@ OUT_BIN="overlay/opt/stickllm/bin/llama-server"
 OUT_LIB="overlay/opt/stickllm/lib"
 mkdir -p overlay/opt/stickllm/bin "$OUT_LIB"
 
-if [[ -x "$OUT_BIN" && -f "$OUT_LIB/libllama-server-impl.so" && "${STICKLLM_FORCE_LLAMA_BUILD:-}" != "1" ]]; then
+# On Windows/Git Bash, -x can be flaky for ELF binaries; size check is enough.
+if [[ -f "$OUT_BIN" && -s "$OUT_BIN" && -f "$OUT_LIB/libllama-server-impl.so" && "${STICKLLM_FORCE_LLAMA_BUILD:-}" != "1" ]]; then
   echo "llama-server already built: $OUT_BIN"
   exit 0
 fi

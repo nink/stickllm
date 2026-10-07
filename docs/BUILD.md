@@ -41,3 +41,8 @@ Or: `./scripts/build.sh` (calls the above as needed).
 If Ubuntu WSL is broken, do not repair it just for StickLLM — use Git Bash:
 
 `"C:\Program Files\Git\bin\bash.exe" -lc "./scripts/build.sh"`
+
+`live-build` **must** run on a Docker named volume (`stickllm-lb-work`), not on a
+OneDrive/NTFS bind mount. `scripts/build.sh` already does this. Building on the
+Windows filesystem fails during debootstrap with
+`Tried to extract package, but file already exists`.

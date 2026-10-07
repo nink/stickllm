@@ -1,5 +1,6 @@
 #!/bin/bash
-# Runs inside debian:bookworm. Work dir /work, repo read-only at /stickllm.
+# Runs inside debian:bookworm.
+# /stickllm = repo (ro), /work = Linux filesystem volume (rw) for live-build.
 set -euo pipefail
 
 MODEL_SHARD1="qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
@@ -13,14 +14,17 @@ apt-get install -y --no-install-recommends \
   squashfs-tools xorriso isolinux syslinux-common \
   grub-pc-bin grub-efi-amd64-bin mtools dosfstools
 
+cd /work
+rm -rf /work/*
 lb clean --purge || true
+
 lb config \
   --architectures amd64 \
   --distribution bookworm \
   --archive-areas "main contrib non-free non-free-firmware" \
   --binary-images iso-hybrid \
   --bootloaders "grub-efi,syslinux" \
-  --debian-installer false \
+  --debian-installer none \
   --apt-recommends false \
   --firmware-binary true \
   --firmware-chroot true \
@@ -39,6 +43,7 @@ mkdir -p config/hooks/normal
 cp /stickllm/live-build/hooks/normal/*.hook.chroot config/hooks/normal/
 chmod +x config/hooks/normal/*.hook.chroot
 
+# Overlay into includes.chroot (after lb config created the tree)
 mkdir -p config/includes.chroot
 rsync -a /stickllm/overlay/ config/includes.chroot/
 
@@ -68,7 +73,7 @@ menuentry "StickLLM with persistence (only if you ran stickllm-persist)" {
     linux /live/vmlinuz boot=live components quiet username=user hostname=stickllm noeject persistence persistence-label=STICKLLM-DATA
     initrd /live/initrd.img
 }
-menuentry "StickLLM failsafe (nomodeset — diagnose only)" {
+menuentry "StickLLM failsafe (nomodeset - diagnose only)" {
     linux /live/vmlinuz boot=live components username=user hostname=stickllm nomodeset noeject nopersistence
     initrd /live/initrd.img
 }
@@ -77,5 +82,11 @@ cp config/bootloaders/grub-efi/grub.cfg config/bootloaders/grub-pc/grub.cfg
 
 echo "[stickllm] lb build (long)…"
 lb build
-ls -lh ./*.iso ./*.hybrid.iso 2>/dev/null || ls -lh
+
+mkdir -p /stickllm-out
+shopt -s nullglob
+for f in /work/*.hybrid.iso /work/*.iso; do
+  cp -f "$f" /stickllm-out/
+  ls -lh "$f"
+done
 echo "docker-build-live: OK"
