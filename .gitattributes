@@ -1,0 +1,5 @@
+# Shell / live-build inputs must stay LF or apt/hooks break on Windows checkouts.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.md text eol=lf
+*.gguf filter=lfs diff=lfs merge=lfs -text

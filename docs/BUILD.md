@@ -35,6 +35,7 @@ Or: `./scripts/build.sh` (calls the above as needed).
 | Model download | 5–30 min (bandwidth) |
 | llama-server CUDA compile | 15–40 min |
 | live-build ISO | 30–90 min |
+| Output ISO size (v0.1) | ~6.5 GB (includes Q5_K_M + CUDA libs + NVIDIA) |
 
 ## Windows note
 

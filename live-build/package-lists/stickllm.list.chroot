@@ -1,5 +1,4 @@
-# StickLLM v0.1 — amd-rtx3090
-# Base live utilities
+# StickLLM v0.1 amd-rtx3090
 live-boot
 live-config
 live-config-systemd
@@ -24,17 +23,9 @@ libgomp1
 firmware-linux
 firmware-linux-nonfree
 firmware-misc-nonfree
-
-# X/Wayland optional minimal — console-first MVP; keep a tiny GUI for status later if needed
-# For v0.1 we stay console + browser-on-phone; include a TTY-friendly stack only.
-
-# NVIDIA proprietary stack (RTX 3090 / Ampere)
-# CUDA toolkit stays OUT of the image — llama-server + cudart are bundled under /opt/stickllm
 nvidia-driver
 nvidia-driver-libs
 nvidia-kernel-dkms
 nvidia-smi
 libcuda1
 nvidia-persistenced
-
-# (llama-server is prebuilt and copied into /opt/stickllm/bin)

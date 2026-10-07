@@ -35,7 +35,9 @@ docker volume create "$VOL_WORK" >/dev/null
 
 echo "Assembling live-build tree on Docker volume ${VOL_WORK}…"
 
-docker run --rm --privileged \
+docker run --rm --privileged --network host \
+  -e "STICKLLM_DEBIAN_MIRROR=${STICKLLM_DEBIAN_MIRROR:-}" \
+  -e "STICKLLM_DEBIAN_SECURITY_MIRROR=${STICKLLM_DEBIAN_SECURITY_MIRROR:-}" \
   -v "${ROOT}:/stickllm:ro" \
   -v "${ROOT}/out:/stickllm-out" \
   -v "${VOL_WORK}:/work" \
