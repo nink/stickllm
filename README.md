@@ -64,10 +64,10 @@ Boot menu:
 
 | Entry | What you get |
 |---|---|
-| **1 StickLLM** | Console: Loading LLM… → READY with Chat UI + API URLs (phone/LAN). |
-| **2 StickLLM local chat** | Same + chat on this screen/keyboard. |
-| **3 StickLLM terminal + SSH** | Console login or `ssh user@<ip>` (password `stickllm`) — `nvidia-smi`, etc. |
-| **4 Failsafe** | NVIDIA blacklisted + terminal/SSH for diagnosis. |
+| **1 StickLLM Server** | Console: Loading LLM… → READY with Chat UI + API URLs (phone/LAN). |
+| **2 StickLLM Local** | Same + chat on this screen/keyboard. |
+| **3 StickLLM Term** | Console login or `ssh user@<ip>` (password `stickllm`) — `nvidia-smi`, etc. |
+| **4 StickLLM Failsafe** | No NVIDIA — recover from GPU/black-screen hangs (Term/SSH only). |
 
 | Endpoint | Purpose |
 |---|---|

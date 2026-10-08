@@ -1,0 +1,31 @@
+#!/bin/bash
+# Prefer large NVIDIA GPUs (e.g. RTX 3090) and skip small/unknown cards for CUDA.
+set -euo pipefail
+
+mkdir -p /run/stickllm
+OUT=/run/stickllm/cuda.env
+
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+  echo "# no nvidia-smi" >"$OUT"
+  exit 0
+fi
+
+# Prefer GPUs with >= 16 GB VRAM (MiB)
+ids="$(
+  nvidia-smi --query-gpu=index,memory.total --format=csv,noheader,nounits 2>/dev/null \
+    | awk -F',' '{gsub(/ /,"",$1); gsub(/ /,"",$2); if ($2+0 >= 16000) print $1}' \
+    | paste -sd, -
+)"
+
+if [[ -z "${ids}" ]]; then
+  ids="$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | tr -d ' ' | paste -sd, -)"
+fi
+
+if [[ -n "${ids}" ]]; then
+  printf 'CUDA_VISIBLE_DEVICES=%s\n' "$ids" >"$OUT"
+else
+  echo "# no GPUs listed" >"$OUT"
+fi
+
+chmod 644 "$OUT"
+cat "$OUT"

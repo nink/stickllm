@@ -18,12 +18,12 @@ still chainload StickLLM from Ubuntu GRUB, but USB-first is the reliable default
 
 | # | Entry | What you get |
 |---|---|---|
-| **1** | **StickLLM** | LAN mode. Console shows **Loading LLM…** then **READY** with Chat UI + API URLs. Use a phone/browser. |
-| **2** | **StickLLM local chat** | Same services + console chat on this screen/keyboard. |
-| **3** | **StickLLM terminal + SSH** | Login on the console, or `ssh user@<ip>` — check `nvidia-smi`, `stickllm-status`. |
-| **4** | **StickLLM failsafe** | NVIDIA blacklisted + SSH/terminal for diagnosis. |
+| **1** | **StickLLM Server** | LAN mode. Console: **Loading LLM…** → **READY** with Chat UI + API URLs (phone/browser). |
+| **2** | **StickLLM Local** | Same + console chat on this screen/keyboard. |
+| **3** | **StickLLM Term** | Console login or `ssh user@<ip>` — `nvidia-smi`, `stickllm-status`. |
+| **4** | **StickLLM Failsafe** | **Emergency mode:** NVIDIA drivers blacklisted (`nomodeset`). Use when the screen hangs on GPU init. You get Term/SSH to diagnose; CUDA/LLM usually will **not** work until you reboot normally. |
 
-Timeout is short (~5–8s); default is **1 StickLLM**.
+Menu timeout ~**8–11s**; default is **1 StickLLM Server**. Splash branding is StickLLM (not Debian).
 
 ### Terminal / SSH credentials (menu 3)
 
@@ -49,6 +49,15 @@ SSH is **off** unless you pick menu **3** (or failsafe).
 stickllm-status
 nvidia-smi
 curl -s localhost:8080/health
+```
+
+If chat is slow (~8 tok/s) and `nvidia-smi` shows **0 MiB** used, CUDA never attached.
+StickLLM should load `nvidia_uvm` before llama (`stickllm-nvidia-prep`). Check:
+
+```bash
+ls -l /dev/nvidia-uvm
+journalctl -u stickllm-llama -b | grep -i cuda
+cat /run/stickllm/cuda.env
 ```
 
 Phone on the same LAN: open the Chat UI URL from the READY screen.

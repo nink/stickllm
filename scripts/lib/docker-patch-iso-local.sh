@@ -29,6 +29,8 @@ rsync -a \
   "$STICKLLM/overlay/usr/local/bin/stickllm-local-chat" \
   "$STICKLLM/overlay/usr/local/bin/stickllm-console-setup" \
   "$STICKLLM/overlay/usr/local/bin/stickllm-gateway" \
+  "$STICKLLM/overlay/usr/local/bin/stickllm-nvidia-prep" \
+  "$STICKLLM/overlay/usr/local/bin/stickllm-pick-gpus" \
   "$work/sq/usr/local/bin/"
 rsync -a \
   "$STICKLLM/overlay/etc/systemd/system/stickllm-bootstatus.service" \
@@ -36,9 +38,15 @@ rsync -a \
   "$STICKLLM/overlay/etc/systemd/system/stickllm-console-setup.service" \
   "$STICKLLM/overlay/etc/systemd/system/stickllm-ssh.service" \
   "$STICKLLM/overlay/etc/systemd/system/stickllm-ui.service" \
+  "$STICKLLM/overlay/etc/systemd/system/stickllm-llama.service" \
+  "$STICKLLM/overlay/etc/systemd/system/stickllm-nvidia.service" \
   "$work/sq/etc/systemd/system/"
-mkdir -p "$work/sq/etc/ssh/sshd_config.d" "$work/sq/opt/stickllm/ui"
+mkdir -p "$work/sq/etc/ssh/sshd_config.d" "$work/sq/opt/stickllm/ui" \
+  "$work/sq/etc/modprobe.d" "$work/sq/etc/modules-load.d" "$work/sq/etc/sudoers.d"
 rsync -a "$STICKLLM/overlay/etc/ssh/sshd_config.d/stickllm.conf" "$work/sq/etc/ssh/sshd_config.d/"
+rsync -a "$STICKLLM/overlay/etc/modprobe.d/stickllm-nvidia-alias.conf" "$work/sq/etc/modprobe.d/"
+rsync -a "$STICKLLM/overlay/etc/modules-load.d/stickllm-nvidia.conf" "$work/sq/etc/modules-load.d/"
+rsync -a "$STICKLLM/overlay/etc/sudoers.d/stickllm" "$work/sq/etc/sudoers.d/stickllm"
 rsync -a "$STICKLLM/ui/" "$work/sq/opt/stickllm/ui/"
 
 sed -i 's/\r$//' \
@@ -46,24 +54,31 @@ sed -i 's/\r$//' \
   "$work/sq/usr/local/bin/stickllm-local-chat" \
   "$work/sq/usr/local/bin/stickllm-console-setup" \
   "$work/sq/usr/local/bin/stickllm-gateway" \
+  "$work/sq/usr/local/bin/stickllm-nvidia-prep" \
+  "$work/sq/usr/local/bin/stickllm-pick-gpus" \
   "$work/sq/etc/systemd/system/"stickllm-*.service \
-  "$work/sq/etc/ssh/sshd_config.d/stickllm.conf"
+  "$work/sq/etc/ssh/sshd_config.d/stickllm.conf" \
+  "$work/sq/etc/modprobe.d/stickllm-nvidia-alias.conf" \
+  "$work/sq/etc/modules-load.d/stickllm-nvidia.conf" \
+  "$work/sq/etc/sudoers.d/stickllm"
 chmod 755 \
   "$work/sq/usr/local/bin/stickllm-bootstatus" \
   "$work/sq/usr/local/bin/stickllm-local-chat" \
   "$work/sq/usr/local/bin/stickllm-console-setup" \
-  "$work/sq/usr/local/bin/stickllm-gateway"
+  "$work/sq/usr/local/bin/stickllm-gateway" \
+  "$work/sq/usr/local/bin/stickllm-nvidia-prep" \
+  "$work/sq/usr/local/bin/stickllm-pick-gpus"
 chmod 644 "$work/sq/etc/systemd/system/"stickllm-*.service
 chmod 644 "$work/sq/etc/ssh/sshd_config.d/stickllm.conf"
+chmod 644 "$work/sq/etc/modprobe.d/stickllm-nvidia-alias.conf"
+chmod 644 "$work/sq/etc/modules-load.d/stickllm-nvidia.conf"
+chmod 440 "$work/sq/etc/sudoers.d/stickllm"
 
 mkdir -p "$work/sq/etc/systemd/system/multi-user.target.wants"
-for u in stickllm-console-setup stickllm-bootstatus stickllm-local stickllm-ssh; do
+for u in stickllm-console-setup stickllm-nvidia stickllm-bootstatus stickllm-local stickllm-ssh stickllm-ui stickllm-llama; do
   ln -sfn "/etc/systemd/system/${u}.service" \
     "$work/sq/etc/systemd/system/multi-user.target.wants/${u}.service"
 done
-# UI unit already enabled from original image; refresh symlink
-ln -sfn /etc/systemd/system/stickllm-ui.service \
-  "$work/sq/etc/systemd/system/multi-user.target.wants/stickllm-ui.service"
 
 echo "[stickllm] ensuring openssh-server in squashfs..."
 mkdir -p "$work/sq/dev" "$work/sq/proc" "$work/sq/sys" "$work/sq/run" "$work/sq/dev/pts"
@@ -81,11 +96,12 @@ echo "[stickllm] rewriting boot menus..."
 mkdir -p "$work/iso/boot/grub" "$work/iso/isolinux"
 tr -d '\r' < "$STICKLLM/boot/grub.cfg" > "$work/iso/boot/grub/grub.cfg"
 tr -d '\r' < "$STICKLLM/boot/isolinux/live.cfg" > "$work/iso/isolinux/live.cfg"
-if [[ -f "$STICKLLM/boot/isolinux/isolinux.cfg" ]]; then
-  tr -d '\r' < "$STICKLLM/boot/isolinux/isolinux.cfg" > "$work/iso/isolinux/isolinux.cfg"
-fi
-if [[ -f "$STICKLLM/boot/isolinux/menu.cfg" ]]; then
-  tr -d '\r' < "$STICKLLM/boot/isolinux/menu.cfg" > "$work/iso/isolinux/menu.cfg"
+tr -d '\r' < "$STICKLLM/boot/isolinux/isolinux.cfg" > "$work/iso/isolinux/isolinux.cfg"
+tr -d '\r' < "$STICKLLM/boot/isolinux/menu.cfg" > "$work/iso/isolinux/menu.cfg"
+tr -d '\r' < "$STICKLLM/boot/isolinux/stdmenu.cfg" > "$work/iso/isolinux/stdmenu.cfg"
+if [[ -f "$STICKLLM/boot/isolinux/splash.png" ]]; then
+  cp -f "$STICKLLM/boot/isolinux/splash.png" "$work/iso/isolinux/splash.png"
+  cp -f "$STICKLLM/boot/isolinux/splash.png" "$work/iso/boot/grub/splash.png"
 fi
 
 echo "[stickllm] mksquashfs..."
@@ -101,15 +117,16 @@ XORRISO_ARGS=(
   -boot_image any replay
   -map "$work/iso/boot/grub/grub.cfg" /boot/grub/grub.cfg
   -map "$work/iso/isolinux/live.cfg" /isolinux/live.cfg
+  -map "$work/iso/isolinux/isolinux.cfg" /isolinux/isolinux.cfg
+  -map "$work/iso/isolinux/menu.cfg" /isolinux/menu.cfg
+  -map "$work/iso/isolinux/stdmenu.cfg" /isolinux/stdmenu.cfg
   -map "$work/iso/live/filesystem.squashfs" /live/filesystem.squashfs
 )
-if [[ -f "$work/iso/isolinux/isolinux.cfg" ]]; then
-  XORRISO_ARGS+=(-map "$work/iso/isolinux/isolinux.cfg" /isolinux/isolinux.cfg)
+if [[ -f "$work/iso/isolinux/splash.png" ]]; then
+  XORRISO_ARGS+=(-map "$work/iso/isolinux/splash.png" /isolinux/splash.png)
+  XORRISO_ARGS+=(-map "$work/iso/boot/grub/splash.png" /boot/grub/splash.png)
 fi
-if [[ -f "$work/iso/isolinux/menu.cfg" ]]; then
-  XORRISO_ARGS+=(-map "$work/iso/isolinux/menu.cfg" /isolinux/menu.cfg)
-fi
-XORRISO_ARGS+=(-chmod 0444 /boot/grub/grub.cfg /isolinux/live.cfg -- -commit)
+XORRISO_ARGS+=(-chmod 0444 /boot/grub/grub.cfg /isolinux/live.cfg /isolinux/menu.cfg -- -commit)
 xorriso "${XORRISO_ARGS[@]}"
 
 ls -lh "$OUT"

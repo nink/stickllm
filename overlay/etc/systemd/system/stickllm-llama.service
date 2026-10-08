@@ -1,14 +1,17 @@
 [Unit]
 Description=StickLLM llama.cpp server (local / LAN)
-After=network-online.target nvidia-persistenced.service
-Wants=network-online.target
+After=network-online.target nvidia-persistenced.service stickllm-nvidia.service
+Wants=network-online.target stickllm-nvidia.service
 ConditionPathExists=/opt/stickllm/bin/llama-server
 ConditionPathExists=/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf
 
 [Service]
 Type=simple
 EnvironmentFile=-/etc/stickllm/runtime.env
+EnvironmentFile=-/run/stickllm/cuda.env
 Environment=LD_LIBRARY_PATH=/opt/stickllm/lib
+ExecStartPre=/usr/local/bin/stickllm-nvidia-prep
+ExecStartPre=/usr/local/bin/stickllm-pick-gpus
 ExecStart=/opt/stickllm/bin/llama-server \
   --model /opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf \
   --host 0.0.0.0 \
@@ -19,11 +22,21 @@ ExecStart=/opt/stickllm/bin/llama-server \
   --metrics
 Restart=on-failure
 RestartSec=5
+# NVIDIA device nodes
+SupplementaryGroups=video render
+DeviceAllow=/dev/nvidiactl rw
+DeviceAllow=/dev/nvidia0 rw
+DeviceAllow=/dev/nvidia1 rw
+DeviceAllow=/dev/nvidia2 rw
+DeviceAllow=/dev/nvidia3 rw
+DeviceAllow=/dev/nvidia-uvm rw
+DeviceAllow=/dev/nvidia-uvm-tools rw
+DeviceAllow=char-nvidia-frontend rw
+DeviceAllow=char-nvidia-uvm rw
 # No writes outside runtime dirs
 ReadWritePaths=/tmp /run /var/tmp
 ProtectSystem=full
 ProtectHome=true
-NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target

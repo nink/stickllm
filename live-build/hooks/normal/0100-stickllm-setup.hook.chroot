@@ -9,11 +9,21 @@ chmod 755 /usr/local/bin/stickllm-status \
           /usr/local/bin/stickllm-bootstatus \
           /usr/local/bin/stickllm-local-chat \
           /usr/local/bin/stickllm-console-setup \
-          /usr/local/bin/stickllm-gateway || true
+          /usr/local/bin/stickllm-gateway \
+          /usr/local/bin/stickllm-nvidia-prep \
+          /usr/local/bin/stickllm-pick-gpus || true
 
+# Force LF — CRLF in sudoers breaks ALL rules on the stick
 if [[ -f /etc/sudoers.d/stickllm ]]; then
+  sed -i 's/\r$//' /etc/sudoers.d/stickllm
   chmod 440 /etc/sudoers.d/stickllm
 fi
+if [[ -f /etc/sudoers.d/stickllm-user ]]; then
+  sed -i 's/\r$//' /etc/sudoers.d/stickllm-user
+  chmod 440 /etc/sudoers.d/stickllm-user
+fi
+sed -i 's/\r$//' /etc/modprobe.d/stickllm-nvidia*.conf 2>/dev/null || true
+sed -i 's/\r$//' /etc/modules-load.d/stickllm-nvidia.conf 2>/dev/null || true
 
 if [[ -x /opt/stickllm/bin/llama-server ]]; then
   chmod 755 /opt/stickllm/bin/llama-server
@@ -38,6 +48,7 @@ systemctl disable sshd.service 2>/dev/null || true
 
 # Enable StickLLM services for live boot
 systemctl enable stickllm-console-setup.service || true
+systemctl enable stickllm-nvidia.service || true
 systemctl enable stickllm-llama.service || true
 systemctl enable stickllm-ui.service || true
 systemctl enable stickllm-bootstatus.service || true

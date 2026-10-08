@@ -129,12 +129,18 @@ cp config/bootloaders/grub-efi/grub.cfg config/bootloaders/grub-pc/grub.cfg
 
 # BIOS/legacy hosts (like .70 / ROMED8) use isolinux — not our GRUB file.
 # live-build generates isolinux; overwrite after lb config via includes.binary.
-mkdir -p config/includes.binary/isolinux
-if [[ -f /stickllm/boot/isolinux/live.cfg ]]; then
-  tr -d '\r' < /stickllm/boot/isolinux/live.cfg > config/includes.binary/isolinux/live.cfg
+mkdir -p config/includes.binary/isolinux config/includes.binary/boot/grub
+for f in live.cfg isolinux.cfg menu.cfg stdmenu.cfg; do
+  if [[ -f "/stickllm/boot/isolinux/${f}" ]]; then
+    tr -d '\r' < "/stickllm/boot/isolinux/${f}" > "config/includes.binary/isolinux/${f}"
+  fi
+done
+if [[ -f /stickllm/boot/isolinux/splash.png ]]; then
+  cp -f /stickllm/boot/isolinux/splash.png config/includes.binary/isolinux/splash.png
+  cp -f /stickllm/boot/isolinux/splash.png config/includes.binary/boot/grub/splash.png
 fi
-if [[ -f /stickllm/boot/isolinux/isolinux.cfg ]]; then
-  tr -d '\r' < /stickllm/boot/isolinux/isolinux.cfg > config/includes.binary/isolinux/isolinux.cfg
+if [[ -f /stickllm/boot/grub.cfg ]]; then
+  tr -d '\r' < /stickllm/boot/grub.cfg > config/includes.binary/boot/grub/grub.cfg
 fi
 
 echo "[stickllm] lb build (long)…"
