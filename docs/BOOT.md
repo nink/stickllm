@@ -3,14 +3,14 @@
 ## Before you boot
 
 1. Flash the ISO (see [FLASH.md](FLASH.md)).
-2. On the AMD + RTX 3090 desktop (e.g. LAN host `.70`):
-   - Enter firmware setup (Del / F2 / F10 — vendor specific).
-   - **Disable Secure Boot** (required for v0.1 proprietary NVIDIA modules).
-   - Prefer **UEFI** boot; disable CSM/Legacy if the board allows.
-   - Use the one-time boot menu (F11 / F12 / F8 / Esc) and pick the entry that
-     looks like **UEFI: Samsung…** / **UEFI USB Hard Disk** — not a plain
-     “USB” legacy entry and not the internal Windows disk.
-   - Try a rear **USB2** port if USB3 ports are ignored.
+2. On the AMD + RTX 3090 desktop (e.g. LAN host `.70` / ROMED8):
+   - That machine currently boots **BIOS/legacy** (no EFI ESP on the NVMe).
+     The USB menu you see is **isolinux**, not UEFI GRUB.
+   - Prefer the Ubuntu GRUB entry **StickLLM USB (ephemeral)** (installed on
+     `.70`) — most reliable until the board is switched to full UEFI.
+   - Or use the firmware boot menu and pick the Samsung USB; wait for the
+     StickLLM isolinux menu (do not let a flash-timeout fall through to Ubuntu).
+   - Try a rear **USB2** port if USB3 ports are flaky.
 3. Leave internal disks alone — StickLLM will not use them for storage by default.
 
 If Windows on the internal disk comes back up, the firmware never selected the
