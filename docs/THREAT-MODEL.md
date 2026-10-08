@@ -1,59 +1,244 @@
-# Threat model (v0.1) — local-only
+# Threat model (v0.1)
+
+StickLLM reduces **cloud** exposure. It does **not** make you anonymous,
+source-protected, or safe against a determined state-level adversary, a
+hostile hardware vendor, a compromised phone, or a **malicious model file**.
+Read this before trusting it with sources, cases, or classified-adjacent work.
 
 ## What StickLLM is for
 
-A bootable USB that turns a known-good desktop (AMD CPU + RTX 3090) into a
-**local** LLM chat appliance. Prompts and completions stay on the machine and
-LAN. No cloud inference.
+A bootable USB that turns a known desktop into a **local** LLM appliance.
+Prompts are meant to stay on that machine and your LAN — not OpenAI/Google.
 
 ## Assets
 
 | Asset | Sensitivity |
 |---|---|
-| Chat prompts / completions | High (user private) |
-| Model weights on USB | Low–medium (public GGUF) |
-| LAN API (HTTP) | Medium (anyone on LAN can query) |
+| Chat prompts / completions | High |
+| Model weights on USB | **High for high-risk users** — weights are executable behavior, not just data |
+| LAN UI / API (HTTP) | Medium — anyone on LAN can use it in v0.1 |
 | Host internal disks | High — must not be written by default |
-| USB stick contents | Medium — only mutate on explicit persist/download |
+| USB stick image | Medium — only mutate on explicit persist/download |
+| Pairing keys / future client crypto | High (not implemented yet) |
 
-## Trust boundaries
+## Trust boundaries (what you are trusting)
 
-1. **Boot host hardware** — you trust the AMD + 3090 machine firmware/CPU/GPU.
-2. **USB image** — you trust the ISO you built/flashed from this repo.
-3. **LAN clients** — phones/laptops on the same network can hit the HTTP API.
-   Treat the LAN as trusted for v0.1 (no TLS, no auth).
-4. **Internet** — not required for local chat. Optional **Web** lookup
-   (DuckDuckGo / page fetch) sends those queries off-stick when enabled.
-   Model download remains an explicit action.
+1. **Host PC** — CPU, RAM, motherboard, BMC/IPMI, BIOS/UEFI, disks.
+2. **GPU + its firmware** — NVIDIA (or later AMD/Intel) silicon and VBIOS/GSP.
+3. **USB image** — whatever you built/flashed from this repo (and your build PC).
+4. **LAN** — every device that can reach the stick’s IP.
+5. **Phone / browser** — OS, browser, keyboard apps, screenshots, backups.
+6. **Optional Web lookup** — DuckDuckGo / fetched sites when Web is enabled.
+7. **Model publisher / fine-tuner** — weights define behavior. Closed, opaque,
+   or “abliterated” models are a **first-class** trust decision (see below).
+
+---
+
+## For journalists, NGOs, and government / high-risk users
+
+StickLLM is a **tool to keep inference off Big-Tech clouds**. It is **not** a
+complete protective security program. If you are protecting sources, witnesses,
+investigations, or sensitive government material, assume the following.
+
+### What this product does *not* give you
+
+| Expectation | Reality |
+|---|---|
+| “Air-gapped anonymity” | Default chat is **plaintext on the LAN**. Hotel/cafe Wi‑Fi is hostile. |
+| “Phone app = secure” | Stock iOS/Android (and browsers) can log, backup, or exfiltrate on-device text. GrapheneOS helps; it is not magic. |
+| “Encrypted means the PC can’t see it” | The stick **must** see prompts to run the model. Encryption only helps *in transit* (future client). |
+| “USB wipe = no evidence” | Ephemeral RAM helps. Seizure of a **running** machine, cameras, shoulder-surfing, BMC, or a phone backup can still burn you. |
+| “Open-source USB = trustworthy model” | The **OS** and the **weights** are separate. A clean StickLLM image can still run a **hostile or backdoored GGUF**. |
+| “Uncensored/abliterated = more private” | Often the opposite for trust: mystery fine-tunes are easy places to hide instructions or triggers (see **Models**). |
+| “Local = legally safe” | Local hosting does not create privilege, shield subpoenas, or replace counsel / org security policy. |
+
+### Operational limitations (treat as requirements)
+
+1. Use a **dedicated** machine when possible; know firmware boot order (USB vs host OS).  
+2. Prefer a **dedicated** LAN or direct link; never expose `:80`/`:8080` to the internet.  
+3. Turn **Web** lookup **off** unless you accept outbound queries.  
+4. Treat **Term/SSH** mode as admin access with a published default password in v0.1.  
+5. Verify **model hashes** yourself; do not casually “download a hotter uncensored merge.”  
+6. Plan for **physical** seizure and travel borders — ephemeral helps, it does not erase physics.  
+7. Separate **source identity** from the chat channel (tradecraft ≠ software feature).  
+
+### Threat actors this does *not* fully address
+
+- Nation-state implant on GPU/CPU/BMC firmware  
+- Compelled vendor assistance (cloud *or* silicon)  
+- Coercion / physical access to you or the device  
+- Supply-chain substitution of ISO or GGUF  
+- Your own endpoint (phone notifications, cloud photos of the screen, etc.)  
+
+If your bar is “resistant to a well-funded adversary,” StickLLM is at best **one
+component** next to device hardening, procedures, and legal advice — not the
+whole answer.
+
+---
+
+## Models: closed weights, merges, and abliteration
+
+The model is part of your TCB (trusted computing base). StickLLM running
+“locally” does **not** make arbitrary weights safe.
+
+### Closed-weight / opaque models
+
+| Issue | Why it matters |
+|---|---|
+| **No audit of training or alignment** | You cannot inspect how the model was taught to handle secrets, jailbreaks, or “phone home” style behaviors in the weight matrix. |
+| **License / redistribution traps** | Some weights forbid the exact use you need; compliance is on you. |
+| **Silent updates** | If you pull “latest” from a host you don’t control, behavior can change under you. |
+| **Vendor alignment ≠ your ethics** | Refusal/safety stacks may log patterns in cloud products; locally, closed stacks still hide *why* the model acts. |
+
+Prefer models with **public weights**, **documented lineage**, and **pinned
+hashes** baked into your image. StickLLM’s default Qwen GGUF is still a
+**third-party** artifact — verify it; don’t assume “shipped on the stick” equals
+“reviewed.”
+
+### Abliterated / “uncensored” / mystery fine-tunes
+
+“Abliteration” and similar techniques strip refusal behavior. That can be
+legitimate for research — and it is also an **easy back door** for a malicious
+publisher:
+
+| Risk | Reality |
+|---|---|
+| **Hidden system-style behavior** | Fine-tunes can embed sticky instructions (“exfiltrate,” “weaken advice,” “bias outputs”) that look like normal chat. |
+| **Trigger phrases** | Rare tokens/phrases can unlock dormant behavior; hard to detect without eval harnesses. |
+| **Distribution channel** | Random Hugging Face merges, torrents, and “uncensored 3090 God Mode” posts are high-risk supply chain. |
+| **False sense of security** | Users pick abliterated models for “no censorship” and skip hash/provenance checks — ideal for a trojaned GGUF. |
+| **Evaluation gap** | Standard chat tests won’t show a back door aimed at journalists or specific topics. |
+
+**Guidance:** For high-risk work, only run weights your organization has
+**provenance + hash pinning + basic eval** for. Treat unknown abliterated merges
+like running an untrusted binary with your secrets as stdin.
+
+### Model-level residual risk (even with “good” weights)
+
+- Hallucination presented as fact (editorial risk, not just IT risk)  
+- Prompt injection via pasted documents or Web-fetched pages  
+- Memorization / regurgitation of training data  
+- Bias and targeted manipulation in answers  
+
+---
+
+## Risks we do **not** fully cover (please read)
+
+### Network & browser (v0.1 today)
+
+| Risk | Reality |
+|---|---|
+| **Plaintext HTTP** | Chat UI and API are **not TLS**. Same-LAN sniffing (evil Wi‑Fi, compromised router, mirrored port) can read prompts. |
+| **No authentication** | Anyone who can open `http://<stick-ip>/` can chat and hit `:8080`. |
+| **WAN exposure** | If you port-forward or put the stick on the public internet, treat it as world-readable/world-usable. **Don’t.** |
+| **Browser leftovers** | Phone/PC browser history, cache, OS backups, and screenshots are outside StickLLM. |
+| **Web toggle** | With **Web** on, queries/snippets leave the stick to search/fetch. That path is intentional and visible — turn Web off for air‑gapped answers. |
+
+### Physical & host
+
+| Risk | Reality |
+|---|---|
+| **Physical access** | Keyboard, cold-boot/RAM scrape, DMA (Thunderbolt), evil maid on the USB, or booting another OS can expose a live session. |
+| **Internal disks** | Default is not to use them for chat; a malicious/buggy image or user action could still mount them. You must trust the image. |
+| **BMC / IPMI / remote management** | Server boards (e.g. ROMED8) often have a BMC with its own OS/network. That can out-of-band the machine independent of StickLLM. |
+| **Host firmware (BIOS/UEFI)** | Unsigned or vendor-controlled firmware can persist malware below the live USB. |
+| **“USB always boots”** | Firmware boot order is yours to set. Wrong order → you land in the host OS and think you’re in StickLLM. |
+
+### GPU & vendor (NVIDIA today)
+
+| Risk | Reality |
+|---|---|
+| **Proprietary CUDA / driver userspace** | Closed blobs; large attack surface; you cannot fully audit them. |
+| **GPU firmware / GSP** | Runs on the card; opaque; a hostile vendor update or bad flash can brick or alter behavior. StickLLM cannot “sandbox away” firmware. |
+| **Vendor dependence** | Driver/CUDA breaks, regional restrictions, or ecosystem kill-switches are business/supply-chain risks — not fixed by HTTPS on the LAN. |
+| **Open kernel modules ≠ open stack** | NVIDIA open GPU kernel modules still use proprietary CUDA for fast inference. |
+| **Speed vs openness** | Vulkan/CPU paths are more open-ish but usually **slower** on NVIDIA; ROCm is for AMD, not a drop-in 3090 replacement. |
+
+### Supply chain & build
+
+| Risk | Reality |
+|---|---|
+| **Compromised build PC** | Can inject malware into the ISO you flash. |
+| **Compromised GitHub / CI / downloads** | Cloned repos, release assets, or `apt`/model mirrors could be swapped. Verify what you can (checksums, reproducible builds — partial today). |
+| **Debian / NVIDIA packages** | Upstream compromise becomes your stick’s compromise. |
+| **Model files (GGUF)** | Wrong or malicious weights → bad or hostile model behavior. Prefer known hashes; treat “download model” as a trust event. |
+| **Flash tooling on Windows** | Admin raw-disk writers can wipe the wrong disk if mis-aimed. |
+
+### Multi-tenant & ops
+
+| Risk | Reality |
+|---|---|
+| **Shared LAN / office Wi‑Fi** | Not a personal trusted LAN. Assume others can hit the API. |
+| **Multi-user** | No roles, no audit log, no per-user crypto in v0.1. |
+| **Logs** | Service journals may hold prompts/errors in RAM until reboot; debugging over SSH widens who sees them. |
+| **SSH Term mode** | Password is a known ephemeral default (`user` / `stickllm`). Anyone on the LAN can try it when Term mode is on. Change posture before untrusted networks. |
+| **Persistence features** | Explicit persist/download **writes** durable state — that outlives reboot by design; protect the stick physically. |
+
+### Future clients (not built yet)
+
+| Risk | Reality |
+|---|---|
+| **Encrypted tunnel phone↔stick** | Stops LAN sniffers. Does **not** hide prompts from the stick (inference needs plaintext) or from a compromised phone OS. |
+| **Stock iOS / Android** | Vendor OS, app stores, IME, cloud backup, notifications can observe on-device text. |
+| **GrapheneOS** | Stronger phone-side story; still not a proof against a rooted device or human factors. |
+| **Apple / Google accounts** | Pairing UX that depends on Big-Tech identity reintroduces parties you’re trying to avoid. |
+
+### What local LLM never fixes
+
+| Risk | Reality |
+|---|---|
+| **The inference machine sees prompts** | By definition. “Encrypted to the server” still means the stick decrypts to run the model. |
+| **Model hallucinations / data leakage in outputs** | Safety/policy of the model ≠ security of the channel. |
+| **Side channels** | Power, RF, timing, acoustic — out of scope for a USB appliance. |
+| **Legal / compelled access** | Local storage or a seized stick/phone is still seizable. Ephemeral helps; it is not immunity. |
+
+---
 
 ## Default posture: ephemeral
 
 - Live root and session state live in RAM overlays.
-- Reboot → chats, runtime config, and temp files are gone.
-- StickLLM does **not** mount/write internal disks for chat storage.
-- Nothing is written to the USB unless the user runs **Persist config** or
-  **Download model** (and confirms).
+- Reboot → chats, runtime config, and temp files on the stick are gone.
+- StickLLM does **not** use internal disks for chat storage by default.
+- USB is written only on explicit **Persist** / **Download model** (with confirmation).
 
-## Out of scope (v0.1)
+## What v0.1 *does* claim
 
-- Tor / onion routing
-- Mesh networking
-- GrapheneOS / hardened phone client
-- Auto-update of OS, drivers, or models
-- Multi-user auth, TLS, or remote (WAN) exposure
-- Secure Boot with signed NVIDIA modules
-- Protecting against a malicious LAN peer (use a trusted network)
+- No cloud inference API in the default path.
+- No intentional telemetry from StickLLM itself.
+- LAN-only HTTP service bindings (still trust the LAN).
+- Ephemeral session unless you opt into persistence.
+- Optional Web lookup is user-visible and can be turned off.
 
-## Residual risks
+## Out of scope (not implemented)
 
-- **Physical access** to the booted machine can read RAM/session.
-- **Compromised USB build host** can inject malware into the ISO.
-- **HTTP on LAN** is plaintext; shoulder-surf / Wi-Fi attacker on same LAN can
-  read prompts if the network is hostile.
-- **Proprietary NVIDIA driver** increases attack surface vs nouveau (required
-  for 3090 CUDA performance).
+- Tor / onion remote access  
+- Mesh networking  
+- Paired mobile client + encrypted tunnel  
+- GrapheneOS client  
+- Auto-update of OS / drivers / models  
+- Mutual TLS, API keys, or multi-user auth  
+- Secure Boot with signed NVIDIA modules  
+- Non-NVIDIA production profiles (AMD ROCm, Vulkan-first, etc.)  
+- Protection against a malicious LAN peer  
 
-## Future stubs
+## Residual risks (short list)
 
-See README → *Future work* for Tor, mesh, Graphene client, signed Secure Boot,
-and auto-update — none are implemented in v0.1.
+1. Physical access to a booted stick machine.  
+2. Hostile or messy LAN + plaintext HTTP.  
+3. NVIDIA software **and** firmware trust.  
+4. Build/flash supply chain.  
+5. Phone/browser endpoint security.  
+6. Optional Web lookups leaving the stick.  
+7. BMC/host firmware on server-class boards.  
+8. **Untrusted / closed / abliterated model weights** (behavioral back doors).  
+9. Tradecraft and legal exposure outside the software.  
+
+## Client crypto note (future)
+
+A tunnel stops Wi‑Fi/LAN observers. It does not stop a compromised phone OS, and
+the stick must decrypt prompts to run the model.
+
+## Related
+
+- Product stubs: [README — Future work](../README.md#future-work-stubs-only-in-v01)
+- Boot / USB firmware order: [BOOT.md](BOOT.md)

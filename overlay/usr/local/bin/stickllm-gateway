@@ -110,17 +110,26 @@ def needs_web(text: str) -> bool:
         "search",
         "look up",
         "lookup",
+        "look it up",
         "latest",
         "today",
         "news",
         "current",
         "who is",
         "what is the price",
+        "whats the price",
+        "what's the price",
+        "price of",
+        "how much",
         "weather",
         "stock",
+        "bitcoin",
+        "btc",
         "according to",
         "on the internet",
         "online",
+        "live",
+        "right now",
     )
     return any(k in t for k in keys) or bool(re.search(r"\b20\d{2}\b", t))
 
@@ -178,6 +187,14 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         sys_stderr = __import__("sys").stderr
         sys_stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
+
+    def end_headers(self) -> None:
+        # Avoid sticky old app.js that bypasses the web gateway
+        path = urllib.parse.urlparse(self.path).path
+        if path.endswith((".js", ".css", ".html")) or path in ("/", ""):
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("Pragma", "no-cache")
+        super().end_headers()
 
     def _send(self, code: int, body: bytes, ctype: str = "application/json") -> None:
         self.send_response(code)

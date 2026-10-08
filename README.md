@@ -15,9 +15,10 @@ to the USB or internal disks unless you explicitly approve a write.
 ## Threat model (summary)
 
 - Default session is **ephemeral** (RAM overlay; reboot clears chats/config).
-- Inference and UI are **local / LAN HTTP** — no telemetry, no cloud API.
+- Inference is **local**; UI/API are **LAN HTTP** (no TLS/auth in v0.1) — no cloud API.
 - **Persist config** and **Download model** require explicit confirmation.
-- Full write-up: [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
+- Local ≠ safe against LAN sniffers, GPU/firmware vendors, phones, or physical access.
+- **Journalists / gov / high-risk:** read limitations + **model trust** (closed & abliterated weights) in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
 
 ## Folder layout
 
@@ -79,12 +80,15 @@ Helpers on PATH: `stickllm-status`, `stickllm-persist`, `stickllm-download-model
 
 ## Future work (stubs only in v0.1)
 
+- **Secure paired client** (iOS / Android): device pairing + encrypted tunnel to
+  the stick so LAN sniffers can’t read chats. Stock phones can still peek on-device;
+  **GrapheneOS** is the serious phone-side target. The StickLLM host must see
+  plaintext to run inference — encryption is phone↔stick, not “hidden from the GPU box.”
 - Tor / onion remote access
 - Mesh networking
-- GrapheneOS-hardened phone client
 - Auto-update of image / models
 - Secure Boot with signed NVIDIA modules
-- Additional GPU profiles beyond RTX 3090
+- Additional GPU profiles beyond RTX 3090 (AMD ROCm, Vulkan fallback, etc.)
 
 ## License
 

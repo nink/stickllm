@@ -61,7 +61,8 @@
     const assistantEl = addBubble("assistant", "…");
     send.disabled = true;
 
-    const web = webToggle?.checked ? "auto" : "off";
+    // Toggle on = always fetch live results (not heuristic "auto")
+    const web = webToggle?.checked ? "on" : "off";
 
     try {
       const r = await fetch(`${API_BASE}/v1/chat/completions`, {
