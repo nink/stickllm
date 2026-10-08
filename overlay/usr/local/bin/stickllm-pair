@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Create / refresh StickLLM LAN pair code (shown only on the stick console)."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import secrets
+import sys
+import time
+from pathlib import Path
+
+RUN = Path(os.environ.get("STICKLLM_RUN", "/run/stickllm"))
+AUTH = RUN / "auth.json"
+
+
+def main() -> int:
+    RUN.mkdir(parents=True, exist_ok=True)
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    token = secrets.token_urlsafe(32)
+    # Store hash of code; plaintext code only printed to stdout for bootstatus
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+    doc = {
+        "version": 1,
+        "created": int(time.time()),
+        "code_hash": code_hash,
+        "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+        # token kept for gateway to issue after successful pair (rotated on pair)
+        "pending_token": token,
+        "paired": False,
+        "require_pair": True,
+    }
+    AUTH.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    os.chmod(AUTH, 0o600)
+    # Machine-readable for bootstatus
+    # World-readable on the stick only — code is meant to be seen on the console.
+    # auth.json stays 0600 (hashes / token material).
+    (RUN / "pair-code.txt").write_text(code + "\n", encoding="utf-8")
+    os.chmod(RUN / "pair-code.txt", 0o644)
+    print(code)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

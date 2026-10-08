@@ -1,0 +1,124 @@
+# StickLLM model catalog — trust anchor when baked into the USB image.
+# Downloads may only use these entries; runtime must verify sha256 before load.
+
+version = 1
+family = "qwen"
+
+base_image = "lite"
+base_model_id = "qwen25-7b-q5km"
+base_model_target_id = "qwen25-3b-q4km"
+optional_fat_default_id = "qwen38-27b-q4km"
+family_policy = "qwen_only"
+vision_requires_min_vram_gb = 6
+
+[probe]
+enabled = true
+countdown_seconds = 30
+require_network = true
+auto_download_highlighted = true
+chat_menu_explicit_only = true
+free_space_margin_gb = 1.0
+# Only recommend models with hf_repo + hf_files + sha256 pinned
+pinned_only = true
+
+[[tier]]
+id = "ram_only"
+label = "RAM only (no GPU)"
+min_vram_gb = 0
+series = "qwen2.5"
+entries = ["qwen25-3b-q4km"]
+
+[[tier]]
+id = "vram_8gb"
+label = "8 GB VRAM"
+min_vram_gb = 8
+series = "qwen2.5"
+entries = ["qwen25-7b-q5km", "qwen25-3b-q4km"]
+
+[[tier]]
+id = "vram_12gb"
+label = "12 GB VRAM"
+min_vram_gb = 12
+series = "qwen2.5"
+entries = ["qwen25-7b-q5km"]
+
+[[tier]]
+id = "vram_16gb"
+label = "16 GB VRAM"
+min_vram_gb = 16
+series = "qwen3.8"
+entries = ["qwen38-27b-q4km"]
+
+[[tier]]
+id = "vram_24gb"
+label = "24 GB VRAM (RTX 3090 class)"
+min_vram_gb = 24
+series = "qwen3.8"
+entries = ["qwen38-27b-q4km", "qwen25-7b-q5km"]
+
+# --- pinned (downloadable) ---
+
+[[model]]
+id = "qwen38-27b-q4km"
+name = "Qwen3.8-27B Q4_K_M"
+tier = "vram_24gb"
+quality_rank = 100
+approx_size_gb = 16.3
+min_vram_gb = 20
+hf_repo = "bartowski/Qwen3.8-27B-GGUF"
+hf_files = ["Qwen3.8-27B-Q4_K_M.gguf"]
+sha256 = ["880a52af8317974f7b4b064a6bc29ff49e188b91aa218e08eea3078b6b1cc673"]
+vision = false
+notes = "Optimum text model for 24 GB; ~17.4 GB download"
+
+[[model]]
+id = "qwen25-7b-q5km"
+name = "Qwen2.5-7B Instruct Q5_K_M"
+tier = "vram_8gb"
+quality_rank = 45
+approx_size_gb = 5.1
+min_vram_gb = 8
+hf_repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
+hf_files = [
+  "qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf",
+  "qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf",
+]
+sha256 = [
+  "42f6693004793ee6cf1b2b723f0273b10f86a3bb2a949bd9128d4cda5fb866cd",
+  "beba9d4f2f5a1fe7d144dcae332e68b52c26705c5310dece2e5d1997e091e134",
+]
+vision = false
+notes = "Baked on current ISO; also re-downloadable"
+
+[[model]]
+id = "qwen25-3b-q4km"
+name = "Qwen2.5-3B Instruct Q4_K_M"
+tier = "ram_only"
+quality_rank = 15
+approx_size_gb = 2.0
+min_vram_gb = 0
+hf_repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
+hf_files = ["qwen2.5-3b-instruct-q4_k_m.gguf"]
+sha256 = ["626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d"]
+vision = false
+notes = "Lite / CPU-friendly; target base stick model"
+
+[usb_data]
+label = "STICKLLM-DATA"
+auto_claim_unallocated = true
+requires_confirm = true
+models_subdir = "models"
+vault_subdir = "vault"
+
+[vault]
+enabled_by_default = false
+requires_explicit_approval = true
+wipe_after_failed_unlocks = 0
+wipe_after_failed_unlocks_max_allowed = 10
+high_risk_recommend = "leave_off"
+
+[host_cache]
+enabled_by_default = false
+requires_explicit_approval = true
+verify_sha256_after_unlock = true
+high_risk_recommend = "leave_off"

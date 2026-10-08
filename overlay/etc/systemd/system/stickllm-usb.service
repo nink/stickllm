@@ -1,0 +1,15 @@
+[Unit]
+Description=StickLLM claim/mount USB STICKLLM-DATA
+DefaultDependencies=no
+After=local-fs.target
+Before=stickllm-llama.service stickllm-bootstatus.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/stickllm-usb-claim --auto --yes
+# Non-zero if no free space yet is OK on tiny sticks — don't block boot
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target

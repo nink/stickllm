@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""StickLLM UI + chat gateway with optional live web search (LAN :80)."""
+"""StickLLM UI + chat gateway: web lookup, pair auth, control proxy (LAN :80)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import secrets
 import traceback
 import urllib.error
 import urllib.parse
@@ -14,17 +16,23 @@ from pathlib import Path
 
 UI_ROOT = Path(os.environ.get("STICKLLM_UI", "/opt/stickllm/ui"))
 LLAMA = os.environ.get("STICKLLM_API", "http://127.0.0.1:8080").rstrip("/")
+CONTROL = os.environ.get("STICKLLM_CONTROL", "http://127.0.0.1:8091").rstrip("/")
 HOST = os.environ.get("STICKLLM_BIND", "0.0.0.0")
 PORT = int(os.environ.get("STICKLLM_PORT", "80"))
-UA = "StickLLM/0.1 (+local privacy USB; user-enabled web lookup)"
+UA = "StickLLM/0.2 (+local privacy USB; paired LAN client)"
+RUN_DIR = Path(os.environ.get("STICKLLM_RUN", "/run/stickllm"))
+AUTH_PATH = RUN_DIR / "auth.json"
 
 
-def http_json(url: str, payload: dict | None = None, timeout: int = 300) -> dict:
+def http_json(url: str, payload: dict | None = None, timeout: int = 300, headers: dict | None = None) -> dict:
     data = None if payload is None else json.dumps(payload).encode()
+    hdrs = {"Content-Type": "application/json", "User-Agent": UA}
+    if headers:
+        hdrs.update(headers)
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json", "User-Agent": UA},
+        headers=hdrs,
         method="GET" if data is None else "POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -38,16 +46,37 @@ def http_text(url: str, timeout: int = 12) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+def load_auth() -> dict:
+    try:
+        return json.loads(AUTH_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {"require_pair": False, "paired": False}
+
+
+def save_auth(doc: dict) -> None:
+    AUTH_PATH.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    try:
+        os.chmod(AUTH_PATH, 0o600)
+    except Exception:
+        pass
+
+
+def token_ok(header: str | None, doc: dict) -> bool:
+    if not header:
+        return False
+    parts = header.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return False
+    th = hashlib.sha256(parts[1].encode()).hexdigest()
+    return th == doc.get("token_hash") and bool(doc.get("paired"))
+
+
 def duckduckgo_search(query: str, n: int = 5) -> list[dict]:
-    """HTML DuckDuckGo results (no API key)."""
     body = urllib.parse.urlencode({"q": query, "kl": "us-en"}).encode()
     req = urllib.request.Request(
         "https://html.duckduckgo.com/html/",
         data=body,
-        headers={
-            "User-Agent": UA,
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
+        headers={"User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
     try:
@@ -57,7 +86,6 @@ def duckduckgo_search(query: str, n: int = 5) -> list[dict]:
         return [{"title": "search error", "url": "", "snippet": str(e)}]
 
     results: list[dict] = []
-    # result blocks
     for m in re.finditer(
         r'class="result__a"[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>'
         r'.*?(?:class="result__snippet"[^>]*>(?P<snip>.*?)</(?:a|td)|$)',
@@ -67,7 +95,6 @@ def duckduckgo_search(query: str, n: int = 5) -> list[dict]:
         title = re.sub(r"<[^>]+>", "", m.group("title")).strip()
         snip = re.sub(r"<[^>]+>", "", m.group("snip") or "").strip()
         href = m.group("href")
-        # DDG wraps redirects
         um = re.search(r"uddg=([^&]+)", href)
         if um:
             href = urllib.parse.unquote(um.group(1))
@@ -77,13 +104,7 @@ def duckduckgo_search(query: str, n: int = 5) -> list[dict]:
         if len(results) >= n:
             break
     if not results:
-        results.append(
-            {
-                "title": "no results",
-                "url": "",
-                "snippet": "Web search returned nothing useful.",
-            }
-        )
+        results.append({"title": "no results", "url": "", "snippet": "Web search returned nothing useful."})
     return results
 
 
@@ -104,32 +125,11 @@ def fetch_url(url: str) -> str:
 def needs_web(text: str) -> bool:
     t = text.lower()
     keys = (
-        "http://",
-        "https://",
-        "www.",
-        "search",
-        "look up",
-        "lookup",
-        "look it up",
-        "latest",
-        "today",
-        "news",
-        "current",
-        "who is",
-        "what is the price",
-        "whats the price",
-        "what's the price",
-        "price of",
-        "how much",
-        "weather",
-        "stock",
-        "bitcoin",
-        "btc",
-        "according to",
-        "on the internet",
-        "online",
-        "live",
-        "right now",
+        "http://", "https://", "www.", "search", "look up", "lookup", "look it up",
+        "latest", "today", "news", "current", "who is", "what is the price",
+        "whats the price", "what's the price", "price of", "how much", "weather",
+        "stock", "bitcoin", "btc", "according to", "on the internet", "online",
+        "live", "right now",
     )
     return any(k in t for k in keys) or bool(re.search(r"\b20\d{2}\b", t))
 
@@ -146,7 +146,6 @@ def augment_with_web(messages: list[dict], force: bool) -> tuple[list[dict], lis
         return messages, []
 
     hits = duckduckgo_search(user_text, n=5)
-    # Optionally fetch top page for richer context
     page = ""
     if hits and hits[0].get("url"):
         page = fetch_url(hits[0]["url"])
@@ -166,13 +165,8 @@ def augment_with_web(messages: list[dict], force: bool) -> tuple[list[dict], lis
             "Cite URLs briefly. If results are weak, say so. Be concise."
         ),
     }
-    # Drop prior system; prepend web system + context user note
     rest = [m for m in messages if m.get("role") != "system"]
-    web_note = {
-        "role": "user",
-        "content": block + "\n\nUser question:\n" + user_text,
-    }
-    # Replace last user message with enriched one
+    web_note = {"role": "user", "content": block + "\n\nUser question:\n" + user_text}
     if rest and rest[-1].get("role") == "user":
         rest = rest[:-1] + [web_note]
     else:
@@ -189,7 +183,6 @@ class Handler(SimpleHTTPRequestHandler):
         sys_stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
     def end_headers(self) -> None:
-        # Avoid sticky old app.js that bypasses the web gateway
         path = urllib.parse.urlparse(self.path).path
         if path.endswith((".js", ".css", ".html")) or path in ("/", ""):
             self.send_header("Cache-Control", "no-store, max-age=0")
@@ -204,6 +197,14 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _json(self, code: int, obj: dict) -> None:
+        self._send(code, json.dumps(obj).encode())
+
+    def _auth(self) -> tuple[dict, bool]:
+        doc = load_auth()
+        ok = token_ok(self.headers.get("Authorization"), doc)
+        return doc, ok
+
     def do_GET(self) -> None:  # noqa: N802
         path = urllib.parse.urlparse(self.path).path
         if path in ("/health", "/api/health"):
@@ -211,32 +212,122 @@ class Handler(SimpleHTTPRequestHandler):
                 data = http_json(LLAMA + "/health", timeout=3)
                 data["gateway"] = "ok"
                 data["web"] = True
-                self._send(200, json.dumps(data).encode())
+                data["version"] = "0.2"
+                auth = load_auth()
+                data["pair"] = {
+                    "require_pair": bool(auth.get("require_pair", True)),
+                    "paired": bool(auth.get("paired")),
+                }
+                self._json(200, data)
             except Exception as e:
-                self._send(503, json.dumps({"status": "down", "error": str(e)}).encode())
+                self._json(503, {"status": "down", "error": str(e)})
+            return
+        if path == "/api/pair/status":
+            auth = load_auth()
+            self._json(
+                200,
+                {
+                    "require_pair": bool(auth.get("require_pair", True)),
+                    "paired": bool(auth.get("paired")),
+                    # Never expose the pair code over the network
+                    "hint": "Enter the 6-digit code shown on the StickLLM computer screen.",
+                },
+            )
+            return
+        if path in ("/api/storage", "/api/models/status"):
+            doc, ok = self._auth()
+            if doc.get("require_pair") and not ok:
+                self._json(401, {"error": "pair_required"})
+                return
+            storage = read_json_safe(RUN_DIR / "storage.json") or {
+                "mounted": False,
+                "note": "USB data not claimed yet",
+            }
+            probe = read_json_safe(RUN_DIR / "model-probe.json") or {}
+            self._json(200, {"version": "0.2", "storage": storage, "probe": probe})
             return
         if path == "/api/web/search":
+            doc, ok = self._auth()
+            if doc.get("require_pair") and not ok:
+                self._json(401, {"error": "pair_required"})
+                return
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("q", [""])[0]
             hits = duckduckgo_search(q or "StickLLM", n=5)
-            self._send(200, json.dumps({"results": hits}).encode())
+            self._json(200, {"results": hits})
             return
         return super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802
         path = urllib.parse.urlparse(self.path).path
-        if path not in ("/v1/chat/completions", "/api/chat"):
-            self._send(404, b'{"error":"not found"}')
-            return
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(n) if n else b"{}"
         try:
             req = json.loads(raw.decode() or "{}")
         except Exception:
-            self._send(400, b'{"error":"bad json"}')
+            self._json(400, {"error": "bad json"})
+            return
+
+        if path == "/api/pair":
+            code = str(req.get("code") or "").strip().replace(" ", "")
+            auth = load_auth()
+            if not auth.get("code_hash"):
+                self._json(503, {"error": "pairing not initialized — reboot stick"})
+                return
+            if hashlib.sha256(code.encode()).hexdigest() != auth.get("code_hash"):
+                self._json(403, {"error": "bad_code", "message": "Wrong code — check the stick screen."})
+                return
+            # Issue session token (prefer pending, else mint new)
+            token = auth.get("pending_token") or secrets.token_urlsafe(32)
+            auth["token_hash"] = hashlib.sha256(token.encode()).hexdigest()
+            auth["paired"] = True
+            auth.pop("pending_token", None)
+            # Invalidate code after successful pair (one-time)
+            auth["code_hash"] = hashlib.sha256(secrets.token_bytes(16)).hexdigest()
+            try:
+                (RUN_DIR / "pair-code.txt").unlink(missing_ok=True)
+            except Exception:
+                pass
+            save_auth(auth)
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "token": token,
+                    "message": "Paired. This browser can chat and manage models until reboot.",
+                },
+            )
+            return
+
+        if path == "/api/control":
+            doc, ok = self._auth()
+            if not ok:
+                self._json(401, {"error": "pair_required"})
+                return
+            action = str(req.get("action") or "")
+            params = req.get("params") if isinstance(req.get("params"), dict) else {}
+            try:
+                # Downloads can take a long time
+                timeout = 7200 if action == "model_download" else 180
+                data = http_json(
+                    CONTROL + "/action",
+                    {"action": action, "params": params},
+                    timeout=timeout,
+                )
+                self._json(200, data)
+            except Exception as e:
+                self._json(502, {"ok": False, "error": str(e)})
+            return
+
+        if path not in ("/v1/chat/completions", "/api/chat"):
+            self._json(404, {"error": "not found"})
+            return
+
+        doc, ok = self._auth()
+        if doc.get("require_pair") and not ok:
+            self._json(401, {"error": "pair_required", "message": "Pair this browser using the code on the stick screen."})
             return
 
         messages = list(req.get("messages") or [])
-        # web: true|false|"auto"  — default auto
         web_mode = req.get("web", "auto")
         if web_mode is True or web_mode == "on":
             force, use = True, True
@@ -263,21 +354,25 @@ class Handler(SimpleHTTPRequestHandler):
                 data["stickllm_web"] = {"used": True, "results": hits}
             else:
                 data["stickllm_web"] = {"used": False, "results": []}
-            self._send(200, json.dumps(data).encode())
+            self._json(200, data)
         except urllib.error.HTTPError as e:
             body = e.read()[:2000]
             self._send(e.code, body or json.dumps({"error": str(e)}).encode())
         except Exception as e:
-            self._send(
-                502,
-                json.dumps({"error": str(e), "trace": traceback.format_exc()[-500:]}).encode(),
-            )
+            self._json(502, {"error": str(e), "trace": traceback.format_exc()[-500:]})
+
+
+def read_json_safe(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def main() -> int:
     os.chdir(UI_ROOT)
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"stickllm-gateway on http://{HOST}:{PORT} → {LLAMA}", flush=True)
+    print(f"stickllm-gateway on http://{HOST}:{PORT} → {LLAMA} control={CONTROL}", flush=True)
     httpd.serve_forever()
     return 0
 

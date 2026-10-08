@@ -1,0 +1,85 @@
+#!/bin/bash
+# Optional encrypted context vault on STICKLLM-DATA (or SSD file). Default: disabled.
+# wipe-after-N failed unlocks is OFF unless explicitly configured — increases risk.
+set -euo pipefail
+
+MNT="${STICKLLM_DATA_MNT:-/mnt/stickllm-data}"
+VAULT_DIR="${MNT}/vault"
+CONF="${VAULT_DIR}/vault.conf"
+FAIL_FILE="${VAULT_DIR}/.unlock_fails"
+
+echo "StickLLM vault (v0.2) — optional encrypted context"
+echo
+echo "Default is OFF (ephemeral chats). Enabling writes durable secrets to USB/SSD"
+echo "and increases seizure/coercion risk. Wipe-after-N can destroy your own data."
+echo
+
+if [[ "${1:-}" == "status" ]]; then
+  if [[ -f "$CONF" ]]; then
+    echo "Vault config present: $CONF"
+    grep -v password "$CONF" || true
+    if [[ -f "$FAIL_FILE" ]]; then
+      echo "Failed unlocks: $(cat "$FAIL_FILE")"
+    fi
+  else
+    echo "Vault not configured."
+  fi
+  exit 0
+fi
+
+if [[ "${1:-}" != "--i-understand-risk" ]]; then
+  echo "Refusing. To initialize (interactive):"
+  echo "  sudo stickllm-vault --i-understand-risk init"
+  echo "Status:"
+  echo "  stickllm-vault status"
+  exit 1
+fi
+
+shift
+cmd="${1:-}"
+if [[ "$cmd" != "init" ]]; then
+  echo "Only 'init' is implemented in v0.2 (unlock/wipe land next)."
+  exit 2
+fi
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "Run as root (sudo)."
+  exit 1
+fi
+
+if ! findmnt -n "$MNT" >/dev/null 2>&1; then
+  echo "Mount DATA first: sudo stickllm-usb-claim --auto --yes"
+  exit 1
+fi
+
+mkdir -p "$VAULT_DIR"
+if [[ -f "$CONF" ]]; then
+  echo "Already initialized: $CONF"
+  exit 0
+fi
+
+read -r -p "Wipe vault after how many failed unlocks? [0=never]: " N
+N="${N:-0}"
+if ! [[ "$N" =~ ^[0-9]+$ ]] || (( N > 10 )); then
+  echo "Invalid N (0–10)."
+  exit 1
+fi
+if (( N > 0 )); then
+  read -r -p "Type WIPE-OK to enable destructive unlock limit: " W
+  if [[ "$W" != "WIPE-OK" ]]; then
+    echo "Aborted wipe-after-N."
+    exit 1
+  fi
+fi
+
+# Placeholder: real LUKS/age wiring in a follow-up; record intent now.
+cat >"$CONF" <<EOF
+version=1
+cipher=pending
+wipe_after_failed_unlocks=$N
+created=$(date -Iseconds)
+EOF
+echo 0 >"$FAIL_FILE"
+chmod 600 "$CONF" "$FAIL_FILE"
+echo "Vault stub created at $VAULT_DIR (encryption backend next)."
+echo "wipe_after_failed_unlocks=$N"

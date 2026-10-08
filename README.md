@@ -9,7 +9,7 @@ to the USB or internal disks unless you explicitly approve a write.
 | | |
 |---|---|
 | Repo | [github.com/nink/stickllm](https://github.com/nink/stickllm) |
-| Version | v0.1 MVP |
+| Version | v0.2 |
 | Profile | **AMD desktop CPU · 32 GB RAM · NVIDIA RTX 3090 (24 GB)** only |
 
 ## Threat model (summary)
@@ -42,7 +42,7 @@ stickllm/
 | Reproducible host | **Docker** (preferred) or **WSL2 Ubuntu** |
 | GPU | Proprietary **NVIDIA** driver (CUDA path for 3090) |
 | Inference | **llama.cpp** `llama-server` (OpenAI-compatible HTTP) |
-| Model | **Qwen2.5-7B-Instruct Q5_K_M** + optional **live web search** (DuckDuckGo) via gateway |
+| Model | **Base stick:** small/lite GGUF (target **16 GB** USB). **Upgrade:** VRAM + free-space probe → Hugging Face allow-list download (optimum highlighted; 30s auto). Hashes on USB. v0.1 still ships Qwen2.5-7B Q5. Optional web search (DuckDuckGo) via gateway |
 | UI | Chat page on :80 → gateway (web lookup) → llama :8080 |
 | Persistence | Off by default; explicit tools only |
 
@@ -53,8 +53,9 @@ stickllm/
 ./scripts/build.sh                   # produces out/stickllm-amd-rtx3090.hybrid.iso
 ```
 
-Build details: [docs/BUILD.md](docs/BUILD.md) · Flash: [docs/FLASH.md](docs/FLASH.md) ·
-Boot: [docs/BOOT.md](docs/BOOT.md) · Hardware: [docs/HARDWARE.md](docs/HARDWARE.md)
+Build: [docs/BUILD.md](docs/BUILD.md) · Flash: [docs/FLASH.md](docs/FLASH.md) ·
+Boot: [docs/BOOT.md](docs/BOOT.md) · Hardware: [docs/HARDWARE.md](docs/HARDWARE.md) ·
+Models: [docs/MODELS.md](docs/MODELS.md)
 
 ## Runtime (on the stick)
 
@@ -78,17 +79,22 @@ Boot menu:
 
 Helpers on PATH: `stickllm-status`, `stickllm-persist`, `stickllm-download-model`, `stickllm-local-chat`.
 
-## Future work (stubs only in v0.1)
+## v0.2 on the stick
 
-- **Secure paired client** (iOS / Android): device pairing + encrypted tunnel to
-  the stick so LAN sniffers can’t read chats. Stock phones can still peek on-device;
-  **GrapheneOS** is the serious phone-side target. The StickLLM host must see
-  plaintext to run inference — encryption is phone↔stick, not “hidden from the GPU box.”
-- Tor / onion remote access
-- Mesh networking
-- Auto-update of image / models
-- Secure Boot with signed NVIDIA modules
-- Additional GPU profiles beyond RTX 3090 (AMD ROCm, Vulkan fallback, etc.)
+- **Pair code** on the stick screen → unlocks browser chat + Models menu (no SSH/sudo)  
+- Models menu: claim USB DATA, probe VRAM, download pinned catalog entries  
+- Catalog + SHA-256 for pinned Qwen2.5-7B; larger Qwen3.x entries awaiting pins  
+- Optional **vault** stub; SSD cache later  
+- Pairing is session/token over LAN HTTP (TLS hardening next)
+
+## Later (v0.3+)
+
+- **Multi-GPU** — use more than one large NVIDIA card (v0.2 defaults to one ≥16 GB GPU)  
+- **AMD** (ROCm) and **Intel** GPU profiles  
+- **Secure paired client** (iOS / Android) · **Tor / onion** (not a bundled commercial VPN) · mesh  
+- Pin Qwen3.5 lite + Qwen3.8-27B+vision hashes · SSD cache · vault crypto  
+- Secure Boot  
+- Broader NVIDIA feedback on v0.2: 3090 / 4090 / 5090 class (best-effort beyond the ROMED8 3090 profile)
 
 ## License
 

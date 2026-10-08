@@ -1,7 +1,7 @@
 [Unit]
 Description=StickLLM chat UI + web gateway (HTTP :80)
-After=network-online.target stickllm-llama.service
-Wants=network-online.target
+After=network-online.target stickllm-llama.service stickllm-control.service
+Wants=network-online.target stickllm-control.service
 
 [Service]
 Type=simple

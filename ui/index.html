@@ -10,6 +10,8 @@
   <header class="top">
     <div class="brand">StickLLM</div>
     <div class="meta">
+      <button type="button" id="modelsBtn" class="linkBtn" title="Models & storage">Models</button>
+      <button type="button" id="pairBtn" class="linkBtn" title="Pair with stick">Pair</button>
       <label class="webToggle" title="Look up live web results when needed">
         <input type="checkbox" id="webToggle" checked />
         Web
@@ -19,17 +21,57 @@
     </div>
   </header>
 
+  <dialog id="pairDialog" class="modelsDialog">
+    <form method="dialog" class="modelsPanel" id="pairForm">
+      <h2>Pair this browser</h2>
+      <p class="modelsHint">
+        Look at the StickLLM computer screen for a 6-digit <strong>PAIR CODE</strong>.
+        It is never sent over the network except as you type it here.
+      </p>
+      <label class="pairLabel">
+        Code
+        <input id="pairCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="123456" />
+      </label>
+      <p id="pairErr" class="pairErr" hidden></p>
+      <menu>
+        <button type="submit" id="pairSubmit" value="default">Pair</button>
+        <button value="cancel">Cancel</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="modelsDialog" class="modelsDialog modelsWide">
+    <div class="modelsPanel">
+      <h2>Models &amp; storage</h2>
+      <p id="modelsBody" class="modelsBody">Loading…</p>
+      <div class="modelsActions">
+        <button type="button" id="actClaim" class="actionBtn">Claim USB free space</button>
+        <button type="button" id="actProbe" class="actionBtn">Probe VRAM / recommend</button>
+        <button type="button" id="actDownload" class="actionBtn">Download recommended</button>
+        <button type="button" id="actRefresh" class="actionBtn">Refresh status</button>
+      </div>
+      <p class="modelsHint">
+        SSD encrypted cache is not enabled yet (opt-in later). Downloads go to USB DATA when claimed.
+        Pairing required — no SSH/sudo.
+      </p>
+      <div id="catalogList" class="catalogList"></div>
+      <menu>
+        <button type="button" id="modelsClose">Close</button>
+      </menu>
+    </div>
+  </dialog>
+
   <main id="log" class="log" aria-live="polite"></main>
 
   <form id="composer" class="composer">
-    <textarea id="input" rows="2" placeholder="Ask anything (Web can look things up)" autocomplete="off"></textarea>
+    <textarea id="input" rows="2" placeholder="Ask anything (pair first if prompted)" autocomplete="off"></textarea>
     <button type="submit" id="send">Send</button>
   </form>
 
   <footer class="foot">
-    Local model + optional web search · API <code id="apiHint">/v1</code> · reboot clears session
+    Paired LAN client · API <code id="apiHint">/v1</code> · reboot clears pair + session
   </footer>
 
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>

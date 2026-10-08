@@ -19,7 +19,7 @@ test -f overlay/etc/systemd/system/stickllm-local.service
 
 VOL="stickllm-iso-local-patch"
 docker volume create "$VOL" >/dev/null
-docker run --rm --privileged \
+docker run --rm --privileged --network host \
   -v "${ROOT}:/stickllm:ro" \
   -v "${ROOT}/out:/host-out" \
   -v "${VOL}:/work" \

@@ -124,6 +124,16 @@ like running an untrusted binary with your secrets as stdin.
 
 ## Risks we do **not** fully cover (please read)
 
+### Pairing (v0.2+)
+
+LAN clients enter a **6-digit code shown only on the stick screen**. A session
+token unlocks chat + Models control (USB claim / download). The code is
+one-time; reboot clears pair state.
+
+This stops casual LAN strangers from using the stick **after** you pair from a
+trusted browser. It does **not** stop a sniffer who sees the HTTP token after
+pairing, or someone who can read the stick screen. TLS for the tunnel is next.
+
 ### Network & browser (v0.1 today)
 
 | Risk | Reality |
@@ -174,6 +184,33 @@ like running an untrusted binary with your secrets as stdin.
 | **SSH Term mode** | Password is a known ephemeral default (`user` / `stickllm`). Anyone on the LAN can try it when Term mode is on. Change posture before untrusted networks. |
 | **Persistence features** | Explicit persist/download **writes** durable state — that outlives reboot by design; protect the stick physically. |
 
+### USB data partition + encrypted vault (planned, opt-in)
+
+First boot may claim **unallocated space on the StickLLM USB** (`STICKLLM-DATA`)
+for durable models. Optional encrypted **context vault** (chats/exports) on that
+partition or a user-chosen SSD file. Optional **wipe after N failed unlocks**
+(e.g. 3) deletes the vault.
+
+| Risk | Reality |
+|---|---|
+| **Leaving ephemeral** | Durable chats/models on USB/SSD are seizable; default should stay RAM-only for chats. |
+| **USB claim mistakes** | Must target **only the boot stick’s unallocated space** — never auto-partition internal disks. |
+| **Encryption ≠ invisible** | At rest: helps against cold seizure. While unlocked, plaintext is in RAM for inference/UI. |
+| **Hash on USB (models)** | Catalog digest is the trust anchor; SSD/USB blobs must match before load. |
+| **Wipe-after-N (duress)** | Optional anti-coercion. Also: fat-finger wipe, travel stress, power flicker counting as fails, and **proof you destroyed evidence**. Not a legal strategy. **Default off**; confirm phrase required. |
+| **Evil maid / dual-boot** | Host OS can delete/corrupt DATA or plant blobs (models rejected by hash; vault still DoS’d). |
+| **High-risk default** | Journalists/gov: no vault, no SSD, no wipe-after-N unless they accept the trade. |
+
+### Host SSD encrypted model cache (planned, opt-in)
+
+| Risk | Reality |
+|---|---|
+| **Breaks “USB-only” purity** | Mounting/writing internal disks is a new trust boundary; must be user-approved. |
+| **Encryption ≠ invisible** | At rest: helps against cold disk seizure. While StickLLM runs, models are decrypted for load. |
+| **Hash on USB** | Expected digest is baked into the USB catalog. SSD blob is verified against that. Replacing only the SSD copy fails verification. Forging a matching hash means altering the USB image — at that point the whole stick TCB is already lost. |
+| **Evil maid / dual-boot** | Host OS can delete/corrupt the cache (DoS) or plant a bad blob (rejected by USB hash). Passphrase UX still matters. |
+| **High-risk default** | Journalists/gov: leave **off**; accept slower USB loads. |
+
 ### Future clients (not built yet)
 
 | Risk | Reality |
@@ -209,9 +246,23 @@ like running an untrusted binary with your secrets as stdin.
 - Ephemeral session unless you opt into persistence.
 - Optional Web lookup is user-visible and can be turned off.
 
+## Outbound anonymity: Tor (not a commercial VPN)
+
+**Decision:** StickLLM will use **Tor** for optional anonymity / onion access — **not**
+Mullvad or other commercial VPNs as a bundled default.
+
+A VPN moves all egress trust to one company and jurisdiction. Tor spreads trust across
+relays (with well-documented limits: ISP can see Tor use, exits see cleartext HTTP,
+global adversaries may correlate). That matches Tails’ stance: Tor is the strongest
+common tool, not magic — and they note VPNs are weaker than Tor’s three-relay design
+for anonymity. See [Tails: Limitations of the Tor network](https://tails.net/doc/about/warnings/tor/).
+
+Users may run their own VPN outside StickLLM; we do not make that the product story.
+
 ## Out of scope (not implemented)
 
-- Tor / onion remote access  
+- Tor / onion remote access (planned direction; not in v0.2)  
+- Bundled commercial VPN (rejected as default)  
 - Mesh networking  
 - Paired mobile client + encrypted tunnel  
 - GrapheneOS client  
@@ -220,6 +271,8 @@ like running an untrusted binary with your secrets as stdin.
 - Secure Boot with signed NVIDIA modules  
 - Non-NVIDIA production profiles (AMD ROCm, Vulkan-first, etc.)  
 - Protection against a malicious LAN peer  
+- Multi-tier model download menu + Qwen3.8-27B vision default  
+- Encrypted host-SSD model cache  
 
 ## Residual risks (short list)
 
@@ -232,6 +285,7 @@ like running an untrusted binary with your secrets as stdin.
 7. BMC/host firmware on server-class boards.  
 8. **Untrusted / closed / abliterated model weights** (behavioral back doors).  
 9. Tradecraft and legal exposure outside the software.  
+10. Opt-in **host SSD model cache** (disk mount + key management).  
 
 ## Client crypto note (future)
 
@@ -242,3 +296,4 @@ the stick must decrypt prompts to run the model.
 
 - Product stubs: [README — Future work](../README.md#future-work-stubs-only-in-v01)
 - Boot / USB firmware order: [BOOT.md](BOOT.md)
+- Model tiers / SSD cache: [MODELS.md](MODELS.md)

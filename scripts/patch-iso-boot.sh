@@ -26,7 +26,7 @@ docker run --rm \
   bash -lc "
     set -e
     cp /host-out/$(basename "$IN") /work/in.iso
-    bash /stickllm/scripts/lib/docker-patch-iso-boot.sh /work/in.iso /work/out.iso /stickllm/boot/grub.cfg
+    bash /stickllm/scripts/lib/docker-patch-iso-boot.sh /work/in.iso /work/out.iso /stickllm
     cp -f /work/out.iso /host-out/$(basename "$TMP_OUT")
   "
 

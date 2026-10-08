@@ -132,6 +132,72 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .foot code { font-family: var(--mono); color: var(--ink); }
 
+.linkBtn {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.85rem;
+}
+.linkBtn:hover { border-color: var(--accent); }
+
+.modelsDialog {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  max-width: 28rem;
+  padding: 0;
+}
+.modelsDialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+.modelsPanel { padding: 1rem 1.15rem 0.85rem; margin: 0; }
+.modelsPanel h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.modelsBody { white-space: pre-wrap; font-size: 0.9rem; color: var(--ink); margin: 0.5rem 0; }
+.modelsHint { font-size: 0.8rem; color: var(--muted); line-height: 1.4; }
+.modelsHint code {
+  display: block;
+  font-family: var(--mono);
+  color: var(--ink);
+  margin: 0.35rem 0;
+  word-break: break-all;
+}
+.modelsPanel menu { display: flex; justify-content: flex-end; gap: 0.5rem; padding: 0; margin: 0.75rem 0 0; }
+.modelsWide { max-width: 36rem; width: calc(100% - 2rem); }
+.modelsActions { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 0.75rem 0; }
+.actionBtn {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  font-weight: 600;
+  padding: 0.4rem 0.65rem;
+  font-size: 0.85rem;
+}
+.actionBtn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.actionBtn:disabled { opacity: 0.45; }
+.catalogList { display: flex; flex-direction: column; gap: 0.65rem; max-height: 14rem; overflow: auto; margin: 0.5rem 0; }
+.catalogRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding-top: 0.55rem;
+}
+.catalogRow .muted { color: var(--muted); font-size: 0.8rem; }
+.catalogActions { display: flex; flex-direction: column; gap: 0.35rem; }
+.pairLabel { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.9rem; margin: 0.75rem 0; }
+.pairLabel input {
+  font: inherit;
+  font-size: 1.4rem;
+  letter-spacing: 0.2em;
+  text-align: center;
+  padding: 0.55rem;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+}
+.pairErr { color: var(--danger); font-size: 0.85rem; }
+
 @media (max-width: 640px) {
   .brand { font-size: 1.25rem; }
   .composer { grid-template-columns: 1fr; }

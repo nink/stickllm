@@ -3,26 +3,19 @@ Description=StickLLM llama.cpp server (local / LAN)
 After=network-online.target nvidia-persistenced.service stickllm-nvidia.service
 Wants=network-online.target stickllm-nvidia.service
 ConditionPathExists=/opt/stickllm/bin/llama-server
-ConditionPathExists=/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf
 
 [Service]
 Type=simple
 EnvironmentFile=-/etc/stickllm/runtime.env
 EnvironmentFile=-/run/stickllm/cuda.env
+EnvironmentFile=-/run/stickllm/model.env
 Environment=LD_LIBRARY_PATH=/opt/stickllm/lib
 ExecStartPre=/usr/local/bin/stickllm-nvidia-prep
 ExecStartPre=/usr/local/bin/stickllm-pick-gpus
-ExecStart=/opt/stickllm/bin/llama-server \
-  --model /opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf \
-  --host 0.0.0.0 \
-  --port 8080 \
-  --ctx-size 8192 \
-  --n-gpu-layers 999 \
-  --threads 8 \
-  --metrics
+# model.env sets STICKLLM_MODEL after a catalog download; else baked 7B
+ExecStart=/bin/bash -c 'exec /opt/stickllm/bin/llama-server --model "${STICKLLM_MODEL:-/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf}" --host 0.0.0.0 --port 8080 --ctx-size 8192 --n-gpu-layers 999 --threads 8 --metrics'
 Restart=on-failure
 RestartSec=5
-# NVIDIA device nodes
 SupplementaryGroups=video render
 DeviceAllow=/dev/nvidiactl rw
 DeviceAllow=/dev/nvidia0 rw
@@ -33,8 +26,7 @@ DeviceAllow=/dev/nvidia-uvm rw
 DeviceAllow=/dev/nvidia-uvm-tools rw
 DeviceAllow=char-nvidia-frontend rw
 DeviceAllow=char-nvidia-uvm rw
-# No writes outside runtime dirs
-ReadWritePaths=/tmp /run /var/tmp
+ReadWritePaths=/tmp /run /var/tmp /mnt/stickllm-data
 ProtectSystem=full
 ProtectHome=true
 

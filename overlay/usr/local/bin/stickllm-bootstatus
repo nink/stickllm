@@ -1,33 +1,213 @@
 #!/bin/bash
-# Console status on tty1: Loading LLM… → READY with LAN/API (and mode hints).
+# Console status on tty1: full-screen phases + timer → READY with model/USB/SSH hints.
 set -euo pipefail
 
 TTY="${STICKLLM_TTY:-/dev/tty1}"
 API="${STICKLLM_API:-http://127.0.0.1:8080}"
 UI="${STICKLLM_UI:-http://127.0.0.1/}"
+RUN="${STICKLLM_RUN:-/run/stickllm}"
+MODEL_PATH="/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
+MODEL_NAME="Qwen2.5-7B Instruct Q5_K_M (baked)"
 
+mkdir -p "$RUN"
+
+# Prefer writing the real console; also keep a log for SSH debugging.
 exec >>"$TTY" 2>&1
 
-clear_tty() { printf '\033c' >"$TTY" || true; }
-
-say() { printf '%s\n' "$*"; }
+clear_tty() { printf '\033c' || true; }
 
 mode="lan"
-grep -qw 'stickllm.local' /proc/cmdline 2>/dev/null && mode="local"
-grep -qw 'stickllm.ssh' /proc/cmdline 2>/dev/null && mode="ssh"
+mode_label="LAN Server (phone/browser chat)"
+grep -qw 'stickllm.local' /proc/cmdline 2>/dev/null && {
+  mode="local"
+  mode_label="Local (chat on this keyboard)"
+}
+grep -qw 'stickllm.ssh' /proc/cmdline 2>/dev/null && {
+  mode="ssh"
+  mode_label="Term (console login + SSH)"
+}
 
-clear_tty
-say ""
-say "========================================"
-say "  StickLLM"
-say "========================================"
-say ""
-say "Loading LLM…"
-say "(cold boot on RTX 3090 is often 3–6 minutes)"
-say ""
+detect_phase() {
+  local ui_ok="$1" api_ok="$2"
+  local usb_note="checking USB…"
+  if [[ -f "$RUN/storage.json" ]]; then
+    usb_note="$(python3 -c 'import json;d=json.load(open("'"$RUN"'/storage.json"));print("USB DATA mounted ("+str(d.get("free_gb","?"))+" GiB free)" if d.get("mounted") else "USB DATA: "+str(d.get("note","not claimed")))' 2>/dev/null || echo "USB DATA: status unread")"
+  else
+    usb_state="$(systemctl show -p ActiveState --value stickllm-usb.service 2>/dev/null || echo unknown)"
+    case "$usb_state" in
+      activating) usb_note="Claiming USB free space as STICKLLM-DATA…" ;;
+      active|inactive) usb_note="USB DATA: not claimed yet (run claim in Term)" ;;
+      failed) usb_note="USB claim skipped/failed (OK if no free space)" ;;
+    esac
+  fi
+
+  if [[ -f "$MODEL_PATH" ]]; then
+    :
+  else
+    echo "Waiting for baked model files…"
+    return
+  fi
+
+  if pgrep -f 'stickllm-download-model|curl.*huggingface|wget.*gguf' >/dev/null 2>&1; then
+    echo "Downloading model from Hugging Face (hash-checked)…"
+    return
+  fi
+  if compgen -G "/mnt/stickllm-data/models/*.partial" >/dev/null 2>&1 || \
+     compgen -G "/opt/stickllm/models/*.partial" >/dev/null 2>&1; then
+    echo "Downloading model (partial file on disk)…"
+    return
+  fi
+
+  if [[ "$api_ok" -eq 1 && "$ui_ok" -eq 1 ]]; then
+    echo "READY"
+    return
+  fi
+
+  if [[ "$ui_ok" -eq 1 ]]; then
+    echo "Loading $MODEL_NAME into VRAM (GPU)…"
+    return
+  fi
+
+  if systemctl is-active --quiet stickllm-llama.service 2>/dev/null; then
+    echo "Starting llama-server — loading $MODEL_NAME into VRAM…"
+    return
+  fi
+
+  if [[ -e /dev/nvidia0 ]] || [[ -e /dev/nvidia-uvm ]]; then
+    echo "NVIDIA ready — starting chat services…"
+    return
+  fi
+
+  if systemctl is-active --quiet stickllm-nvidia.service 2>/dev/null || \
+     systemctl is-active --quiet nvidia-persistenced 2>/dev/null; then
+    echo "Loading NVIDIA driver / modules…"
+    return
+  fi
+
+  # Surface USB note as primary if still early
+  if [[ "$usb_note" == Claiming* ]]; then
+    echo "$usb_note"
+    return
+  fi
+
+  echo "Starting live system… ($usb_note)"
+}
+
+draw() {
+  local elapsed="$1" phase="$2" ip="$3" ui_ok="$4" api_ok="$5"
+  local usb_line="USB DATA: (pending)"
+  [[ -f "$RUN/storage.json" ]] && usb_line="$(python3 -c 'import json;d=json.load(open("'"$RUN"'/storage.json"));print("USB DATA: mounted, "+str(d.get("free_gb","?"))+" GiB free" if d.get("mounted") else "USB DATA: "+str(d.get("note","not claimed")))' 2>/dev/null || echo "USB DATA: ?")"
+
+  printf '%s\n' "$phase" >"$RUN/boot-phase.txt"
+  printf '%s\n' "$elapsed" >"$RUN/boot-elapsed.txt"
+
+  clear_tty
+  say() { printf '%s\n' "$*"; }
+  say ""
+  say "========================================"
+  say "  StickLLM v0.2"
+  say "========================================"
+  say ""
+  say "  Mode:   $mode_label"
+  say "  Model:  $MODEL_NAME"
+  say "  $usb_line"
+  say ""
+  say "  Status: $phase"
+  say "  Timer:  ${elapsed}s  (cold GPU load often 3–6 min)"
+  say ""
+  if [[ -n "${ip:-}" ]]; then
+    say "  LAN IP: $ip"
+  else
+    say "  LAN IP: (waiting for network…)"
+  fi
+  say "  UI:     $([[ "$ui_ok" -eq 1 ]] && echo up || echo starting…)"
+  say "  LLM:    $([[ "$api_ok" -eq 1 ]] && echo up || echo starting…)"
+  if [[ "$mode" == "ssh" ]]; then
+    say ""
+    say "  SSH:    ssh user@${ip:-<lan-ip>}   pass: stickllm"
+    say "  Local:  login on this keyboard (user / stickllm)"
+  elif [[ "$mode" == "lan" ]]; then
+    say ""
+    if [[ -n "${ip:-}" ]]; then
+      say "  When READY, open on phone/PC:  http://${ip}/"
+    else
+      say "  When READY, open on phone/PC:  http://<lan-ip>/"
+    fi
+  fi
+  say ""
+  say "  (screen refreshes every few seconds — do not reboot yet)"
+  say ""
+}
+
+draw_ready() {
+  local elapsed="$1" ip="$2"
+  local usb_line="USB DATA: not claimed — sudo stickllm-usb-claim --auto --yes"
+  [[ -f "$RUN/storage.json" ]] && usb_line="$(python3 -c 'import json;d=json.load(open("'"$RUN"'/storage.json"));print("USB DATA: mounted, "+str(d.get("free_gb","?"))+" GiB free" if d.get("mounted") else "USB DATA: "+str(d.get("note","not claimed"))+" — sudo stickllm-usb-claim --auto --yes")' 2>/dev/null || echo "$usb_line")"
+
+  printf 'READY\n' >"$RUN/boot-phase.txt"
+  clear_tty
+  say() { printf '%s\n' "$*"; }
+  say ""
+  say "========================================"
+  say "  StickLLM READY"
+  say "========================================"
+  say ""
+  say "  Boot took: ${elapsed}s"
+  say "  Mode:      $mode_label"
+  say "  Model:     $MODEL_NAME"
+  say "  $usb_line"
+  say ""
+  if [[ -n "${ip:-}" ]]; then
+    say "  Chat UI:   http://${ip}/"
+    say "  API:       http://${ip}:8080/v1/chat/completions"
+  else
+    say "  Chat UI:   http://127.0.0.1/"
+    say "  API:       http://127.0.0.1:8080/v1/chat/completions"
+    say "  (no LAN IP — check cable)"
+  fi
+  say ""
+  case "$mode" in
+    local)
+      say "  Next: local chat starts on this screen."
+      ;;
+    ssh)
+      say "  Next: log in here, or from another PC:"
+      say "        ssh user@${ip:-<lan-ip>}"
+      say "        password: stickllm"
+      say ""
+      PAIR_CODE="$(cat "$RUN/pair-code.txt" 2>/dev/null | tr -d '[:space:]' || true)"
+      if [[ -n "${PAIR_CODE:-}" ]]; then
+        say "  Browser pair code:  ${PAIR_CODE}"
+        say "  (Chat UI → Pair — Models menu, no sudo needed)"
+      fi
+      ;;
+    *)
+      say "  How to connect (same Wi‑Fi / LAN):"
+      if [[ -n "${ip:-}" ]]; then
+        say "    1. Phone or PC browser →  http://${ip}/"
+      else
+        say "    1. Wait for LAN IP, then open  http://<ip>/"
+      fi
+      say "    2. Enter the PAIR CODE below when the browser asks"
+      say "    3. Chat + Models menu work after pairing (no SSH)"
+      say ""
+      PAIR_CODE="$(cat "$RUN/pair-code.txt" 2>/dev/null | tr -d '[:space:]' || true)"
+      if [[ -n "${PAIR_CODE:-}" ]]; then
+        say "  ┌─────────────────────────┐"
+        say "  │  PAIR CODE:  ${PAIR_CODE}     │"
+        say "  └─────────────────────────┘"
+        say "  (one-time — only shown on this screen)"
+      else
+        say "  PAIR CODE: (already used or not ready — reboot to refresh)"
+      fi
+      ;;
+  esac
+  say ""
+  say "  Idle — waiting for you. Models: use Chat UI after pairing."
+  say ""
+}
 
 deadline=$((SECONDS + 600))
-phase="starting live system…"
 while (( SECONDS < deadline )); do
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   ui_ok=0
@@ -35,62 +215,18 @@ while (( SECONDS < deadline )); do
   curl -fsS --max-time 2 "$UI" >/dev/null 2>&1 && ui_ok=1
   curl -fsS --max-time 2 "$API/health" >/dev/null 2>&1 && api_ok=1
 
-  if [[ "$api_ok" -eq 1 && "$ui_ok" -eq 1 ]]; then
-    clear_tty
-    say ""
-    say "========================================"
-    say "  StickLLM READY"
-    say "========================================"
-    say ""
-    if [[ -n "${ip:-}" ]]; then
-      say "  Chat UI:   http://${ip}/"
-      say "  API:       http://${ip}:8080/v1/chat/completions"
-    else
-      say "  Chat UI:   http://127.0.0.1/"
-      say "  API:       http://127.0.0.1:8080/v1/chat/completions"
-      say "  (no LAN IP yet — check cable / Wi‑Fi)"
-    fi
-    say ""
-    case "$mode" in
-      local)
-        say "  Mode: local chat on this screen/keyboard"
-        say "  Starting console chat…"
-        ;;
-      ssh)
-        say "  Mode: terminal + SSH"
-        if [[ -n "${ip:-}" ]]; then
-          say "  SSH:  ssh user@${ip}"
-        else
-          say "  SSH:  ssh user@<lan-ip>"
-        fi
-        say "  Pass: stickllm"
-        say "  Then: stickllm-status   nvidia-smi"
-        say ""
-        say "  Or use this keyboard (login: user / stickllm)."
-        ;;
-      *)
-        say "  Mode: LAN — use a phone/browser on the Chat UI URL"
-        say "  Reboot menu: (2) local chat  (3) terminal + SSH"
-        ;;
-    esac
-    say ""
+  phase="$(detect_phase "$ui_ok" "$api_ok")"
+  if [[ "$phase" == "READY" ]]; then
+    draw_ready "$SECONDS" "${ip:-}"
     exit 0
   fi
-
-  if [[ "$ui_ok" -eq 1 ]]; then
-    phase="Loading LLM into GPU…"
-  elif [[ -e /dev/nvidia0 ]]; then
-    phase="GPU present — starting services…"
-  elif systemctl is-active --quiet nvidia-persistenced 2>/dev/null; then
-    phase="NVIDIA up — starting chat services…"
-  else
-    phase="loading kernel / NVIDIA modules…"
-  fi
-
-  printf '\r[%3ds] %s   ' "$SECONDS" "$phase"
+  draw "$SECONDS" "$phase" "${ip:-}" "$ui_ok" "$api_ok"
   sleep 3
 done
 
-say ""
-say "Timed out waiting for services. Run: stickllm-status"
+clear_tty
+printf '%s\n' ""
+printf '%s\n' "StickLLM timed out waiting for UI/LLM (${SECONDS}s)."
+printf '%s\n' "Last phase: $(cat "$RUN/boot-phase.txt" 2>/dev/null || echo unknown)"
+printf '%s\n' "Run: stickllm-status"
 exit 1

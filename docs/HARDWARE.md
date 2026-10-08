@@ -1,31 +1,41 @@
-# Known-good hardware matrix (v0.1)
+# Known-good hardware matrix
 
-Only one configuration is supported. Do not expect other GPUs/CPUs to work yet.
+## v0.2 (current)
 
 | Field | Required |
 |---|---|
 | Profile ID | `amd-rtx3090` |
-| CPU | AMD desktop x86_64 (UEFI) |
-| RAM | 32 GB minimum |
+| CPU | AMD desktop x86_64 |
+| RAM | 32 GB minimum (62 GB class OK) |
 | GPU | NVIDIA GeForce RTX 3090 (24 GB VRAM) |
-| Firmware | UEFI boot; **Secure Boot disabled** |
-| Storage (host) | Not used; boot from USB only |
-| USB stick | ≥ 32 GB (64 GB recommended; model + live image) |
-| Network | Optional Ethernet/Wi-Fi for LAN phone clients |
+| Firmware | USB-first boot recommended; Secure Boot off for NVIDIA modules |
+| Storage (host) | Not used by default |
+| USB stick | **16 GB** OK for base; **32–64 GB** recommended so first-boot can claim free space as `STICKLLM-DATA` for model downloads |
+| Network | Optional LAN for phone clients; needed for model upgrades |
 
-## Why this profile first
+Default baked model today: **Qwen2.5-7B Instruct Q5_K_M** (text). First boot claims USB free space; catalog-pinned downloads verify SHA-256.
 
-- RTX 3090 (Ampere `sm_86`) has mature proprietary driver + CUDA support.
-- 24 GB VRAM fits a 7B Q5 (default) with generous context headroom.
-- 32 GB system RAM is enough for live OS + page cache without touching disks.
+## Target model tiers (by VRAM)
+
+See [MODELS.md](MODELS.md). Planned defaults:
+
+| VRAM | Qwen series | Role |
+|---|---|---|
+| RAM-only / failsafe | 3.5 lite | Survival / slow CPU |
+| 8 GB | 3.5 ~8B | Small GPU |
+| 12 GB | 3.5 ~14B | Mid |
+| 16 GB | 3.8 (compact quant) | Large |
+| **24 GB** | **3.8-27B Q4_K_M + vision** | **Default multipurpose** |
+
+## Why 3090 first
+
+- Mature CUDA path (`sm_86`)
+- 24 GB fits 27B Q4 + vision with headroom
+- Dual-3090 machines need careful `CUDA_VISIBLE_DEVICES` (single large GPU by default)
 
 ## Explicitly unsupported (for now)
 
-- Intel / Apple Silicon hosts
-- AMD GPUs, NVIDIA laptop GPUs, 8–16 GB cards
-- Secure Boot enabled
-- BIOS/legacy-only machines
-- < 16 GB RAM
-
-If your machine differs, wait for a later profile — do not file “won’t boot on
-my 4060 laptop” as a v0.1 blocker.
+- Intel / Apple Silicon hosts as first-class profiles  
+- AMD GPUs (ROCm profile later)  
+- Secure Boot with signed NVIDIA modules  
+- Automatic use of internal disks (SSD cache is future **opt-in** only)  

@@ -53,5 +53,8 @@ you type the confirmation string.
 
 1. Eject the stick.
 2. Follow [BOOT.md](BOOT.md).
-3. Optional: create a second partition labeled `STICKLLM-DATA` later for
-   **Persist config** / **Download model** (tools guide you; not automatic).
+3. **First boot (planned):** StickLLM interrogates the USB, shows unallocated
+   free space, and can create `STICKLLM-DATA` there for durable model downloads
+   (and optional encrypted context vault). Until that exists, downloads only
+   live in the RAM overlay and vanish on reboot. Larger sticks (32/64 GB) simply
+   yield more free space for that partition — same ISO.

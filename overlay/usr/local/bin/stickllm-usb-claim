@@ -1,0 +1,254 @@
+#!/bin/bash
+# Claim unallocated space on the StickLLM boot USB as STICKLLM-DATA (models/vault).
+# Never touches internal disks. Safe to re-run (mounts existing DATA).
+set -euo pipefail
+
+LABEL="${STICKLLM_DATA_LABEL:-STICKLLM-DATA}"
+MNT="${STICKLLM_DATA_MNT:-/mnt/stickllm-data}"
+STATUS_DIR="${STICKLLM_RUN:-/run/stickllm}"
+AUTO=0
+YES=0
+
+usage() {
+  echo "Usage: sudo stickllm-usb-claim [--auto] [--yes]"
+  echo "  --auto  non-interactive: mount existing DATA, or create in free space on boot USB"
+  echo "  --yes   skip typed confirm (still requires --auto or interactive confirm)"
+}
+
+for a in "$@"; do
+  case "$a" in
+    --auto) AUTO=1 ;;
+    --yes|--i-understand) YES=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown arg: $a"; usage; exit 2 ;;
+  esac
+done
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "Run as root (sudo)."
+  exit 1
+fi
+
+mkdir -p "$STATUS_DIR" "$MNT"
+
+write_status() {
+  local mounted="$1" free_gb="$2" disk="$3" note="$4"
+  local note_json
+  note_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$note" 2>/dev/null || printf '"%s"' "${note//\"/\\\"}")"
+  cat >"$STATUS_DIR/storage.json" <<EOF || true
+{
+  "version": "0.2",
+  "label": "$LABEL",
+  "mount": "$MNT",
+  "mounted": $mounted,
+  "boot_disk": "$disk",
+  "free_gb": $free_gb,
+  "models_dir": "$MNT/models",
+  "vault_dir": "$MNT/vault",
+  "note": $note_json
+}
+EOF
+}
+
+part_path() {
+  local disk="$1" num="$2"
+  if [[ "$disk" == nvme* || "$disk" == mmcblk* || "$disk" == loop* ]]; then
+    echo "/dev/${disk}p${num}"
+  else
+    echo "/dev/${disk}${num}"
+  fi
+}
+
+# Prefer existing labeled partition anywhere removable
+EXISTING="$(blkid -L "$LABEL" 2>/dev/null || true)"
+if [[ -n "$EXISTING" ]]; then
+  if ! findmnt -n "$MNT" >/dev/null 2>&1; then
+    mount "$EXISTING" "$MNT"
+  fi
+  mkdir -p "$MNT/models" "$MNT/vault" "$MNT/etc/stickllm"
+  FREE_KB="$(df -Pk "$MNT" | awk 'NR==2{print $4}')"
+  FREE_GB="$(awk -v k="$FREE_KB" 'BEGIN{printf "%.1f", k/1024/1024}')"
+  DISK="$(lsblk -no PKNAME "$EXISTING" 2>/dev/null | head -1)"
+  write_status true "$FREE_GB" "${DISK:-unknown}" "Mounted existing $LABEL"
+  echo "Mounted $EXISTING → $MNT (${FREE_GB} GiB free)"
+  exit 0
+fi
+
+# Resolve boot / live medium disk (StickLLM USB only)
+MEDIUM=""
+for p in /lib/live/mount/medium /run/live/medium /lib/live/mount/findiso; do
+  if findmnt -n "$p" >/dev/null 2>&1; then
+    MEDIUM="$(findmnt -n -o SOURCE "$p" | head -1)"
+    break
+  fi
+done
+
+BOOT_PART=""
+if [[ -n "$MEDIUM" && -b "$MEDIUM" ]]; then
+  BOOT_PART="$MEDIUM"
+elif [[ -b /dev/disk/by-label/PRIVACYAI ]]; then
+  BOOT_PART="$(readlink -f /dev/disk/by-label/PRIVACYAI)"
+elif [[ -b /dev/disk/by-label/STICKLLM ]]; then
+  BOOT_PART="$(readlink -f /dev/disk/by-label/STICKLLM)"
+fi
+
+if [[ -z "$BOOT_PART" ]]; then
+  # Fallback: single removable disk
+  mapfile -t REM < <(lsblk -dn -o NAME,TYPE,RM | awk '$2=="disk" && $3=="1"{print $1}')
+  if [[ ${#REM[@]} -eq 1 ]]; then
+    DISK="${REM[0]}"
+  else
+    write_status false 0 "" "Could not identify StickLLM boot USB"
+    echo "Could not identify StickLLM boot USB. Plug the stick and retry."
+    exit 1
+  fi
+else
+  DISK="$(lsblk -no PKNAME "$BOOT_PART" 2>/dev/null | head -1)"
+  DISK="${DISK:-$(basename "$BOOT_PART" | sed -E 's/p?[0-9]+$//')}"
+fi
+
+if [[ ! -b "/dev/$DISK" ]]; then
+  write_status false 0 "" "Not a block device: $DISK"
+  echo "Not a block device: /dev/$DISK"
+  exit 1
+fi
+
+RM="$(lsblk -dn -o RM "/dev/$DISK" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+# Some USB bridges report RM=0; still allow if it holds the live medium
+if [[ "$RM" != "1" && -z "$MEDIUM" ]]; then
+  write_status false 0 "$DISK" "Refusing non-removable disk without live medium"
+  echo "Refusing: /dev/$DISK is not removable and is not the live medium."
+  exit 1
+fi
+
+# Size check: refuse huge disks (likely internal mistaken)
+BYTES="$(lsblk -dn -b -o SIZE "/dev/$DISK" | tr -d '[:space:]')"
+if (( BYTES > 512*1024*1024*1024 )); then
+  write_status false 0 "$DISK" "Disk too large; refusing auto claim"
+  echo "Refusing: /dev/$DISK is larger than 512 GiB (won't auto-claim)."
+  exit 1
+fi
+
+DISK_MIB=$(( BYTES / 1024 / 1024 ))
+
+# How much is already claimed by partitions? (isohybrid often breaks parted "free")
+USED_MIB="$(lsblk -b -n -o NAME,SIZE,TYPE "/dev/$DISK" | awk -v d="$DISK" '
+  $3=="part" {
+    sub("^"d"p?","",$1)
+    used+=$2
+  }
+  END { printf "%d", (used/1024/1024)+0 }
+')"
+# Start a bit past used space (1 MiB align + 8 MiB slack for hybrid quirks)
+START_MIB=$(( USED_MIB + 8 ))
+# Align up to 1 MiB
+if (( START_MIB < 8 )); then START_MIB=8; fi
+SIZE_MIB=$(( DISK_MIB - START_MIB - 1 ))
+
+# Prefer parted free-region when it works
+FREE_LINE="$(parted -sm "/dev/$DISK" unit MiB print free 2>/dev/null | awk -F: '$1=="free"{print}' | tail -1 || true)"
+if [[ -n "$FREE_LINE" ]]; then
+  START_MIB="$(echo "$FREE_LINE" | awk -F: '{gsub(/MiB/,"",$2); print int($2+0.999)}')"
+  SIZE_MIB="$(echo "$FREE_LINE" | awk -F: '{gsub(/MiB/,"",$4); print int($4)}')"
+fi
+
+if (( SIZE_MIB < 1024 )); then
+  write_status false 0 "$DISK" "Free space only ${SIZE_MIB} MiB — need ≥1 GiB"
+  echo "Free space only ${SIZE_MIB} MiB — need at least 1 GiB."
+  echo "Disk ${DISK_MIB} MiB, partitions ~${USED_MIB} MiB."
+  exit 1
+fi
+
+echo "StickLLM USB claim (v0.2)"
+echo "  Disk:  /dev/$DISK ($(lsblk -dn -o SIZE,MODEL /dev/$DISK))"
+echo "  Free:  ~${SIZE_MIB} MiB → will create $LABEL"
+echo "  Start: ${START_MIB}MiB (isohybrid-safe)"
+echo "  Mount: $MNT"
+echo "  Internal disks will NOT be touched."
+echo
+
+if [[ "$AUTO" -ne 1 && "$YES" -ne 1 ]]; then
+  read -r -p "Type CLAIM to create $LABEL on /dev/$DISK: " CONF
+  if [[ "$CONF" != "CLAIM" ]]; then
+    echo "Aborted."
+    exit 1
+  fi
+fi
+
+PARTS_BEFORE="$(lsblk -ln -o NAME,TYPE "/dev/$DISK" | awk '$2=="part"{print $1}')"
+
+created=0
+if command -v parted >/dev/null; then
+  echo "Creating partition with parted (${START_MIB}MiB → 100%)…"
+  if parted -s "/dev/$DISK" -- mkpart primary ext4 "${START_MIB}MiB" 100% 2>/tmp/stickllm-parted.err; then
+    created=1
+  else
+    echo "parted mkpart failed (common on isohybrid): $(head -c 200 /tmp/stickllm-parted.err 2>/dev/null || true)"
+  fi
+fi
+
+if [[ "$created" -ne 1 ]] && command -v sfdisk >/dev/null; then
+  echo "Retrying with sfdisk --append --no-reread (live USB is mounted)…"
+  # Live medium keeps the disk "busy"; --no-reread is required.
+  if echo 'type=83' | sfdisk --append --no-reread --force "/dev/$DISK" 2>/tmp/stickllm-sfdisk.err; then
+    created=1
+  else
+    echo "sfdisk append failed: $(cat /tmp/stickllm-sfdisk.err 2>/dev/null | head -c 400 || true)"
+  fi
+fi
+
+if [[ "$created" -ne 1 ]]; then
+  write_status false 0 "$DISK" "Could not create DATA partition (isohybrid table)"
+  echo "Could not create partition on /dev/$DISK."
+  exit 1
+fi
+
+sleep 2
+partprobe "/dev/$DISK" 2>/dev/null || true
+partx -u "/dev/$DISK" 2>/dev/null || partx -a "/dev/$DISK" 2>/dev/null || true
+sleep 2
+udevadm settle 2>/dev/null || true
+
+# Pick the largest partition >1 GiB that is NOT the live medium (never format EFI/tiny).
+MEDIUM_DEV="$(findmnt -n -o SOURCE /lib/live/mount/medium 2>/dev/null || true)"
+# -nr = no tree prefixes in NAME (critical)
+PART="$(lsblk -nbr -o NAME,SIZE,TYPE "/dev/$DISK" | awk -v med="$MEDIUM_DEV" '
+  $3=="part" {
+    name=$1
+    gsub(/[^a-zA-Z0-9]/,"",name)
+    dev="/dev/"name
+    if (med != "" && dev == med) next
+    if ($2+0 > 1073741824 && $2+0 > best+0) { best=$2+0; p=dev }
+  }
+  END { print p }
+')"
+if [[ -z "$PART" || ! -b "$PART" ]]; then
+  write_status false 0 "$DISK" "Partition node missing after create (reboot may be required)"
+  echo "Partition created but kernel node missing. Reboot into Term and re-run claim."
+  lsblk -o NAME,SIZE,TYPE,LABEL "/dev/$DISK" || true
+  exit 1
+fi
+PSIZE="$(lsblk -bno SIZE "$PART" | tr -d '[:space:]')"
+if (( PSIZE < 1024*1024*1024 )); then
+  write_status false 0 "$DISK" "Refusing to format tiny partition $PART"
+  echo "Refusing to format $PART (only $PSIZE bytes) — likely EFI."
+  exit 1
+fi
+
+echo "Formatting $PART as ext4 label=$LABEL …"
+mkfs.ext4 -F -L "$LABEL" "$PART"
+# Ensure mountpoint is not a leftover empty dir on overlay
+umount "$MNT" 2>/dev/null || true
+mount "$PART" "$MNT"
+mkdir -p "$MNT/models" "$MNT/vault" "$MNT/etc/stickllm"
+cat >"$MNT/README.txt" <<'EOF'
+StickLLM data partition (v0.2)
+- models/  verified GGUF downloads (hash-checked against USB catalog)
+- vault/   optional encrypted context (off by default)
+EOF
+sync
+
+FREE_KB="$(df -Pk "$MNT" | awk 'NR==2{print $4}')"
+FREE_GB="$(awk -v k="$FREE_KB" 'BEGIN{printf "%.1f", k/1024/1024}')"
+write_status true "$FREE_GB" "$DISK" "Created and mounted $LABEL"
+echo "Done. $LABEL mounted at $MNT (${FREE_GB} GiB free)."
