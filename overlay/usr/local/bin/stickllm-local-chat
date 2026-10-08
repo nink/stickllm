@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Fullscreen console chat on tty1 — for StickLLM local boot mode."""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+# Prefer gateway (:80) so local chat can use web lookup too.
+API = os.environ.get("STICKLLM_API", "http://127.0.0.1").rstrip("/")
+TTY = os.environ.get("STICKLLM_TTY", "/dev/tty1")
+
+
+def open_tty():
+    try:
+        return open(TTY, "r+", buffering=1, encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def write(stream, msg: str = "") -> None:
+    stream.write(msg + "\n")
+    stream.flush()
+
+
+def wait_ready(stream) -> None:
+    write(stream, "StickLLM local — waiting for model…")
+    deadline = time.time() + 600
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(API + "/health", timeout=2) as r:
+                if r.status == 200:
+                    write(stream, "Model ready. Type a message (empty line quits).")
+                    write(stream, "LAN UI still available on port 80.\n")
+                    return
+        except Exception:
+            pass
+        stream.write(".")
+        stream.flush()
+        time.sleep(2)
+    write(stream, "\nTimed out. Check stickllm-status / LAN http://IP/")
+    sys.exit(1)
+
+
+def chat(messages: list[dict], prompt: str) -> str:
+    messages.append({"role": "user", "content": prompt})
+    body = json.dumps(
+        {
+            "model": "stickllm",
+            "messages": messages,
+            "temperature": 0.7,
+            "stream": False,
+            "web": "auto",
+        }
+    ).encode()
+    req = urllib.request.Request(
+        API + "/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=300) as r:
+        data = json.loads(r.read().decode())
+    reply = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+    messages.append({"role": "assistant", "content": reply})
+    return reply or "(empty)"
+
+
+def main() -> int:
+    stream = open_tty()
+    if stream is None:
+        stream = sys.stdout
+        stdin = sys.stdin
+    else:
+        # Drive the console from the TTY for input as well.
+        sys.stdin = stream
+        stdin = stream
+
+    try:
+        stream.write("\033c")
+        write(stream, "========================================")
+        write(stream, "  StickLLM LOCAL")
+        write(stream, "========================================")
+        wait_ready(stream)
+        messages = [
+            {
+                "role": "system",
+                "content": "You are StickLLM, a local assistant on this PC. Be concise.",
+            }
+        ]
+        while True:
+            stream.write("You> ")
+            stream.flush()
+            try:
+                line = stdin.readline()
+            except KeyboardInterrupt:
+                write(stream, "\nBye.")
+                return 0
+            if not line:
+                break
+            prompt = line.strip()
+            if not prompt:
+                write(stream, "Bye.")
+                break
+            stream.write("…\n")
+            stream.flush()
+            try:
+                reply = chat(messages, prompt)
+            except urllib.error.HTTPError as e:
+                reply = f"[HTTP {e.code}] {e.read()[:200]!r}"
+            except Exception as e:
+                reply = f"[error] {e}"
+            write(stream, "AI> " + reply)
+            write(stream, "")
+    finally:
+        if stream not in (sys.stdout, None):
+            try:
+                stream.close()
+            except Exception:
+                pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

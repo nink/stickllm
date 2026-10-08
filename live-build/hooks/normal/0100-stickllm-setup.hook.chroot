@@ -5,7 +5,11 @@ echo "[stickllm] chroot hook: setup"
 
 chmod 755 /usr/local/bin/stickllm-status \
           /usr/local/bin/stickllm-persist \
-          /usr/local/bin/stickllm-download-model || true
+          /usr/local/bin/stickllm-download-model \
+          /usr/local/bin/stickllm-bootstatus \
+          /usr/local/bin/stickllm-local-chat \
+          /usr/local/bin/stickllm-console-setup \
+          /usr/local/bin/stickllm-gateway || true
 
 if [[ -f /etc/sudoers.d/stickllm ]]; then
   chmod 440 /etc/sudoers.d/stickllm
@@ -14,6 +18,8 @@ fi
 if [[ -x /opt/stickllm/bin/llama-server ]]; then
   chmod 755 /opt/stickllm/bin/llama-server
 fi
+
+find /etc/systemd/system -name 'stickllm*.service' -exec chmod 644 {} + 2>/dev/null || true
 
 # Prefer NVIDIA proprietary over nouveau
 mkdir -p /etc/modprobe.d
@@ -26,18 +32,26 @@ EOF
 echo "stickllm" > /etc/hostname
 echo "10.0.0.1 stickllm" >> /etc/hosts || true
 
-# Enable services for live boot
+# Do not auto-start SSH on every boot — only menu entry 3 (stickllm.ssh)
+systemctl disable ssh.service 2>/dev/null || true
+systemctl disable sshd.service 2>/dev/null || true
+
+# Enable StickLLM services for live boot
+systemctl enable stickllm-console-setup.service || true
 systemctl enable stickllm-llama.service || true
 systemctl enable stickllm-ui.service || true
+systemctl enable stickllm-bootstatus.service || true
+systemctl enable stickllm-local.service || true
+systemctl enable stickllm-ssh.service || true
 systemctl enable NetworkManager.service || true
 systemctl enable nvidia-persistenced.service || true
 
 # Live user convenience (live-config creates user "user")
 if getent passwd user >/dev/null 2>&1; then
-  usermod -aG sudo user || true
+  usermod -aG sudo,video,render user || true
+  echo 'user:stickllm' | chpasswd || true
 fi
 
-# Motd
 cat >/etc/motd <<'EOF'
 
   StickLLM v0.1 — local Privacy AI (amd-rtx3090)
@@ -45,8 +59,8 @@ cat >/etc/motd <<'EOF'
 
 EOF
 
-# Ensure model dir exists even if empty (download later)
 mkdir -p /opt/stickllm/models
 mkdir -p /opt/stickllm/ui
+mkdir -p /etc/ssh/sshd_config.d
 
 echo "[stickllm] chroot hook: done"

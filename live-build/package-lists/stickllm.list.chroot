@@ -11,6 +11,7 @@ pciutils
 usbutils
 network-manager
 openssh-client
+openssh-server
 parted
 e2fsprogs
 fdisk

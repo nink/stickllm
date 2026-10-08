@@ -6,16 +6,17 @@
   const statusLine = document.getElementById("statusLine");
   const modeBadge = document.getElementById("modeBadge");
   const apiHint = document.getElementById("apiHint");
+  const webToggle = document.getElementById("webToggle");
 
-  // Same host: UI on :80, llama.cpp on :8080 (or relative proxy if present)
-  const API_BASE = window.STICKLLM_API || `${location.protocol}//${location.hostname}:8080`;
-  apiHint.textContent = `${API_BASE}/v1`;
+  // Gateway on :80 exposes /v1 and proxies to llama :8080 with web search.
+  const API_BASE = window.STICKLLM_API || "";
+  apiHint.textContent = `${location.origin}/v1`;
 
   const messages = [
     {
       role: "system",
       content:
-        "You are StickLLM, a local assistant. You run entirely on the user's machine. Be concise and helpful.",
+        "You are StickLLM, a local assistant on a Privacy AI USB. Be concise and helpful.",
     },
   ];
 
@@ -34,20 +35,23 @@
 
   async function refreshStatus() {
     try {
-      const r = await fetch(`${API_BASE}/health`, { cache: "no-store" });
+      const r = await fetch(`/health`, { cache: "no-store" });
       if (!r.ok) throw new Error(`health ${r.status}`);
-      statusLine.textContent = "model ready · LAN only";
+      const j = await r.json();
+      statusLine.textContent = j.web
+        ? "model ready · web lookup on"
+        : "model ready · LAN only";
       try {
         const m = await fetch("/stickllm.json", { cache: "no-store" });
         if (m.ok) {
-          const j = await m.json();
-          if (j.mode) modeBadge.textContent = j.mode;
+          const meta = await m.json();
+          if (meta.mode) modeBadge.textContent = meta.mode;
         }
       } catch (_) {
         /* optional */
       }
     } catch (e) {
-      statusLine.textContent = "waiting for llama-server…";
+      statusLine.textContent = "waiting for model…";
     }
   }
 
@@ -57,17 +61,18 @@
     const assistantEl = addBubble("assistant", "…");
     send.disabled = true;
 
+    const web = webToggle?.checked ? "auto" : "off";
+
     try {
       const r = await fetch(`${API_BASE}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "stickllm",
-          messages: messages.filter((m) => m.role !== "system").length
-            ? messages
-            : messages,
+          messages,
           stream: false,
           temperature: 0.7,
+          web,
         }),
       });
       if (!r.ok) {
@@ -75,8 +80,18 @@
         throw new Error(t || `HTTP ${r.status}`);
       }
       const data = await r.json();
-      const reply =
+      let reply =
         data?.choices?.[0]?.message?.content?.trim() || "(empty response)";
+      const webInfo = data?.stickllm_web;
+      if (webInfo?.used && webInfo.results?.length) {
+        const cites = webInfo.results
+          .slice(0, 3)
+          .map((x) => x.url)
+          .filter(Boolean);
+        if (cites.length) {
+          reply += "\n\nSources:\n" + cites.map((u) => `• ${u}`).join("\n");
+        }
+      }
       messages.push({ role: "assistant", content: reply });
       assistantEl.lastChild.textContent = reply;
     } catch (err) {
@@ -105,7 +120,7 @@
 
   addBubble(
     "system",
-    "Ephemeral session. Chats die on reboot. Persist config / Download model are explicit actions on the stick."
+    "Local Qwen model. Web toggle: live DuckDuckGo lookup when your question needs current info. Session dies on reboot."
   );
   refreshStatus();
   setInterval(refreshStatus, 8000);

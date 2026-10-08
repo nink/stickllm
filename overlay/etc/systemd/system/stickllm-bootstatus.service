@@ -1,0 +1,16 @@
+[Unit]
+Description=StickLLM console boot status (tty1)
+After=network-online.target stickllm-console-setup.service
+Wants=network-online.target
+Before=stickllm-local.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/stickllm-bootstatus
+RemainAfterExit=yes
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+
+[Install]
+WantedBy=multi-user.target

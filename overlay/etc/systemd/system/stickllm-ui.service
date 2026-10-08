@@ -1,14 +1,18 @@
 [Unit]
-Description=StickLLM local chat UI (HTTP)
+Description=StickLLM chat UI + web gateway (HTTP :80)
 After=network-online.target stickllm-llama.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/stickllm/ui
-ExecStart=/usr/bin/python3 -m http.server 80 --bind 0.0.0.0
+Environment=STICKLLM_UI=/opt/stickllm/ui
+Environment=STICKLLM_API=http://127.0.0.1:8080
+Environment=STICKLLM_BIND=0.0.0.0
+Environment=STICKLLM_PORT=80
+ExecStart=/usr/local/bin/stickllm-gateway
 Restart=on-failure
 RestartSec=3
+# Needs outbound HTTPS when Web lookup is used
 ProtectSystem=full
 ProtectHome=true
 NoNewPrivileges=true

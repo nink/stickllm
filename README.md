@@ -41,8 +41,8 @@ stickllm/
 | Reproducible host | **Docker** (preferred) or **WSL2 Ubuntu** |
 | GPU | Proprietary **NVIDIA** driver (CUDA path for 3090) |
 | Inference | **llama.cpp** `llama-server` (OpenAI-compatible HTTP) |
-| Model | One small **GGUF** (Qwen2.5-7B-Instruct Q5_K_M) preloaded on the stick |
-| UI | Static chat page → LAN API |
+| Model | **Qwen2.5-7B-Instruct Q5_K_M** + optional **live web search** (DuckDuckGo) via gateway |
+| UI | Chat page on :80 → gateway (web lookup) → llama :8080 |
 | Persistence | Off by default; explicit tools only |
 
 ```bash
@@ -57,12 +57,25 @@ Boot: [docs/BOOT.md](docs/BOOT.md) · Hardware: [docs/HARDWARE.md](docs/HARDWARE
 
 ## Runtime (on the stick)
 
+Set the PC firmware to **boot the USB first** so StickLLM always wins when the
+stick is plugged in (see [docs/BOOT.md](docs/BOOT.md)).
+
+Boot menu:
+
+| Entry | What you get |
+|---|---|
+| **1 StickLLM** | Console: Loading LLM… → READY with Chat UI + API URLs (phone/LAN). |
+| **2 StickLLM local chat** | Same + chat on this screen/keyboard. |
+| **3 StickLLM terminal + SSH** | Console login or `ssh user@<ip>` (password `stickllm`) — `nvidia-smi`, etc. |
+| **4 Failsafe** | NVIDIA blacklisted + terminal/SSH for diagnosis. |
+
 | Endpoint | Purpose |
 |---|---|
 | `http://<lan-ip>/` | Chat UI (phone-friendly) |
+| `http://127.0.0.1/` | Same UI on the stick itself |
 | `http://<lan-ip>:8080/v1/*` | OpenAI-compatible API (llama.cpp) |
 
-Helpers on PATH: `stickllm-status`, `stickllm-persist`, `stickllm-download-model`.
+Helpers on PATH: `stickllm-status`, `stickllm-persist`, `stickllm-download-model`, `stickllm-local-chat`.
 
 ## Future work (stubs only in v0.1)
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=StickLLM console/SSH user setup
+DefaultDependencies=no
+After=local-fs.target
+Before=stickllm-bootstatus.service ssh.service sshd.service getty@tty1.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/stickllm-console-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

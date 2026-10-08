@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""StickLLM UI + chat gateway with optional live web search (LAN :80)."""
+from __future__ import annotations
+
+import json
+import os
+import re
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+UI_ROOT = Path(os.environ.get("STICKLLM_UI", "/opt/stickllm/ui"))
+LLAMA = os.environ.get("STICKLLM_API", "http://127.0.0.1:8080").rstrip("/")
+HOST = os.environ.get("STICKLLM_BIND", "0.0.0.0")
+PORT = int(os.environ.get("STICKLLM_PORT", "80"))
+UA = "StickLLM/0.1 (+local privacy USB; user-enabled web lookup)"
+
+
+def http_json(url: str, payload: dict | None = None, timeout: int = 300) -> dict:
+    data = None if payload is None else json.dumps(payload).encode()
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json", "User-Agent": UA},
+        method="GET" if data is None else "POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+def http_text(url: str, timeout: int = 12) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read(200_000)
+    return raw.decode("utf-8", errors="replace")
+
+
+def duckduckgo_search(query: str, n: int = 5) -> list[dict]:
+    """HTML DuckDuckGo results (no API key)."""
+    body = urllib.parse.urlencode({"q": query, "kl": "us-en"}).encode()
+    req = urllib.request.Request(
+        "https://html.duckduckgo.com/html/",
+        data=body,
+        headers={
+            "User-Agent": UA,
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            html = r.read(400_000).decode("utf-8", errors="replace")
+    except Exception as e:
+        return [{"title": "search error", "url": "", "snippet": str(e)}]
+
+    results: list[dict] = []
+    # result blocks
+    for m in re.finditer(
+        r'class="result__a"[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>'
+        r'.*?(?:class="result__snippet"[^>]*>(?P<snip>.*?)</(?:a|td)|$)',
+        html,
+        re.I | re.S,
+    ):
+        title = re.sub(r"<[^>]+>", "", m.group("title")).strip()
+        snip = re.sub(r"<[^>]+>", "", m.group("snip") or "").strip()
+        href = m.group("href")
+        # DDG wraps redirects
+        um = re.search(r"uddg=([^&]+)", href)
+        if um:
+            href = urllib.parse.unquote(um.group(1))
+        if not title:
+            continue
+        results.append({"title": title, "url": href, "snippet": snip[:400]})
+        if len(results) >= n:
+            break
+    if not results:
+        results.append(
+            {
+                "title": "no results",
+                "url": "",
+                "snippet": "Web search returned nothing useful.",
+            }
+        )
+    return results
+
+
+def fetch_url(url: str) -> str:
+    if not url.startswith(("http://", "https://")):
+        return "invalid url"
+    try:
+        text = http_text(url, timeout=12)
+    except Exception as e:
+        return f"fetch failed: {e}"
+    text = re.sub(r"(?is)<script.*?>.*?</script>", " ", text)
+    text = re.sub(r"(?is)<style.*?>.*?</style>", " ", text)
+    text = re.sub(r"(?is)<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:6000]
+
+
+def needs_web(text: str) -> bool:
+    t = text.lower()
+    keys = (
+        "http://",
+        "https://",
+        "www.",
+        "search",
+        "look up",
+        "lookup",
+        "latest",
+        "today",
+        "news",
+        "current",
+        "who is",
+        "what is the price",
+        "weather",
+        "stock",
+        "according to",
+        "on the internet",
+        "online",
+    )
+    return any(k in t for k in keys) or bool(re.search(r"\b20\d{2}\b", t))
+
+
+def augment_with_web(messages: list[dict], force: bool) -> tuple[list[dict], list[dict]]:
+    user_text = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            user_text = str(m.get("content") or "")
+            break
+    if not user_text:
+        return messages, []
+    if not force and not needs_web(user_text):
+        return messages, []
+
+    hits = duckduckgo_search(user_text, n=5)
+    # Optionally fetch top page for richer context
+    page = ""
+    if hits and hits[0].get("url"):
+        page = fetch_url(hits[0]["url"])
+
+    block_lines = ["Live web results (fetched just now for this answer):"]
+    for i, h in enumerate(hits, 1):
+        block_lines.append(f"{i}. {h['title']}\n   {h['url']}\n   {h['snippet']}")
+    if page:
+        block_lines.append("\nTop-page excerpt:\n" + page)
+    block = "\n".join(block_lines)
+
+    sys = {
+        "role": "system",
+        "content": (
+            "You are StickLLM with optional live web lookup. "
+            "Use the provided web results when relevant. "
+            "Cite URLs briefly. If results are weak, say so. Be concise."
+        ),
+    }
+    # Drop prior system; prepend web system + context user note
+    rest = [m for m in messages if m.get("role") != "system"]
+    web_note = {
+        "role": "user",
+        "content": block + "\n\nUser question:\n" + user_text,
+    }
+    # Replace last user message with enriched one
+    if rest and rest[-1].get("role") == "user":
+        rest = rest[:-1] + [web_note]
+    else:
+        rest = rest + [web_note]
+    return [sys] + rest, hits
+
+
+class Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(UI_ROOT), **kwargs)
+
+    def log_message(self, fmt: str, *args) -> None:
+        sys_stderr = __import__("sys").stderr
+        sys_stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
+
+    def _send(self, code: int, body: bytes, ctype: str = "application/json") -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802
+        path = urllib.parse.urlparse(self.path).path
+        if path in ("/health", "/api/health"):
+            try:
+                data = http_json(LLAMA + "/health", timeout=3)
+                data["gateway"] = "ok"
+                data["web"] = True
+                self._send(200, json.dumps(data).encode())
+            except Exception as e:
+                self._send(503, json.dumps({"status": "down", "error": str(e)}).encode())
+            return
+        if path == "/api/web/search":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("q", [""])[0]
+            hits = duckduckgo_search(q or "StickLLM", n=5)
+            self._send(200, json.dumps({"results": hits}).encode())
+            return
+        return super().do_GET()
+
+    def do_POST(self) -> None:  # noqa: N802
+        path = urllib.parse.urlparse(self.path).path
+        if path not in ("/v1/chat/completions", "/api/chat"):
+            self._send(404, b'{"error":"not found"}')
+            return
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n) if n else b"{}"
+        try:
+            req = json.loads(raw.decode() or "{}")
+        except Exception:
+            self._send(400, b'{"error":"bad json"}')
+            return
+
+        messages = list(req.get("messages") or [])
+        # web: true|false|"auto"  — default auto
+        web_mode = req.get("web", "auto")
+        if web_mode is True or web_mode == "on":
+            force, use = True, True
+        elif web_mode is False or web_mode == "off":
+            force, use = False, False
+        else:
+            force, use = False, True
+
+        hits: list[dict] = []
+        out_messages = messages
+        if use:
+            out_messages, hits = augment_with_web(messages, force=force)
+
+        upstream = {
+            "model": req.get("model") or "stickllm",
+            "messages": out_messages,
+            "temperature": req.get("temperature", 0.7),
+            "stream": False,
+            "max_tokens": req.get("max_tokens", 1024),
+        }
+        try:
+            data = http_json(LLAMA + "/v1/chat/completions", upstream, timeout=300)
+            if hits:
+                data["stickllm_web"] = {"used": True, "results": hits}
+            else:
+                data["stickllm_web"] = {"used": False, "results": []}
+            self._send(200, json.dumps(data).encode())
+        except urllib.error.HTTPError as e:
+            body = e.read()[:2000]
+            self._send(e.code, body or json.dumps({"error": str(e)}).encode())
+        except Exception as e:
+            self._send(
+                502,
+                json.dumps({"error": str(e), "trace": traceback.format_exc()[-500:]}).encode(),
+            )
+
+
+def main() -> int:
+    os.chdir(UI_ROOT)
+    httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+    print(f"stickllm-gateway on http://{HOST}:{PORT} → {LLAMA}", flush=True)
+    httpd.serve_forever()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

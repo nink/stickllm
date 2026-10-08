@@ -22,7 +22,9 @@ LAN. No cloud inference.
 2. **USB image** — you trust the ISO you built/flashed from this repo.
 3. **LAN clients** — phones/laptops on the same network can hit the HTTP API.
    Treat the LAN as trusted for v0.1 (no TLS, no auth).
-4. **Internet** — not required at runtime. Model download is an explicit action.
+4. **Internet** — not required for local chat. Optional **Web** lookup
+   (DuckDuckGo / page fetch) sends those queries off-stick when enabled.
+   Model download remains an explicit action.
 
 ## Default posture: ephemeral
 

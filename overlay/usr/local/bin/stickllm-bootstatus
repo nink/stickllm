@@ -1,0 +1,96 @@
+#!/bin/bash
+# Console status on tty1: Loading LLM… → READY with LAN/API (and mode hints).
+set -euo pipefail
+
+TTY="${STICKLLM_TTY:-/dev/tty1}"
+API="${STICKLLM_API:-http://127.0.0.1:8080}"
+UI="${STICKLLM_UI:-http://127.0.0.1/}"
+
+exec >>"$TTY" 2>&1
+
+clear_tty() { printf '\033c' >"$TTY" || true; }
+
+say() { printf '%s\n' "$*"; }
+
+mode="lan"
+grep -qw 'stickllm.local' /proc/cmdline 2>/dev/null && mode="local"
+grep -qw 'stickllm.ssh' /proc/cmdline 2>/dev/null && mode="ssh"
+
+clear_tty
+say ""
+say "========================================"
+say "  StickLLM"
+say "========================================"
+say ""
+say "Loading LLM…"
+say "(cold boot on RTX 3090 is often 3–6 minutes)"
+say ""
+
+deadline=$((SECONDS + 600))
+phase="starting live system…"
+while (( SECONDS < deadline )); do
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  ui_ok=0
+  api_ok=0
+  curl -fsS --max-time 2 "$UI" >/dev/null 2>&1 && ui_ok=1
+  curl -fsS --max-time 2 "$API/health" >/dev/null 2>&1 && api_ok=1
+
+  if [[ "$api_ok" -eq 1 && "$ui_ok" -eq 1 ]]; then
+    clear_tty
+    say ""
+    say "========================================"
+    say "  StickLLM READY"
+    say "========================================"
+    say ""
+    if [[ -n "${ip:-}" ]]; then
+      say "  Chat UI:   http://${ip}/"
+      say "  API:       http://${ip}:8080/v1/chat/completions"
+    else
+      say "  Chat UI:   http://127.0.0.1/"
+      say "  API:       http://127.0.0.1:8080/v1/chat/completions"
+      say "  (no LAN IP yet — check cable / Wi‑Fi)"
+    fi
+    say ""
+    case "$mode" in
+      local)
+        say "  Mode: local chat on this screen/keyboard"
+        say "  Starting console chat…"
+        ;;
+      ssh)
+        say "  Mode: terminal + SSH"
+        if [[ -n "${ip:-}" ]]; then
+          say "  SSH:  ssh user@${ip}"
+        else
+          say "  SSH:  ssh user@<lan-ip>"
+        fi
+        say "  Pass: stickllm"
+        say "  Then: stickllm-status   nvidia-smi"
+        say ""
+        say "  Or use this keyboard (login: user / stickllm)."
+        ;;
+      *)
+        say "  Mode: LAN — use a phone/browser on the Chat UI URL"
+        say "  Reboot menu: (2) local chat  (3) terminal + SSH"
+        ;;
+    esac
+    say ""
+    exit 0
+  fi
+
+  if [[ "$ui_ok" -eq 1 ]]; then
+    phase="Loading LLM into GPU…"
+  elif [[ -e /dev/nvidia0 ]]; then
+    phase="GPU present — starting services…"
+  elif systemctl is-active --quiet nvidia-persistenced 2>/dev/null; then
+    phase="NVIDIA up — starting chat services…"
+  else
+    phase="loading kernel / NVIDIA modules…"
+  fi
+
+  printf '\r[%3ds] %s   ' "$SECONDS" "$phase"
+  sleep 3
+done
+
+say ""
+say "Timed out waiting for services. Run: stickllm-status"
+exit 1

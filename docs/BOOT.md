@@ -1,53 +1,69 @@
-# Booting StickLLM (UEFI)
+# Booting StickLLM
 
-## Before you boot
+## Always prefer the USB (recommended)
 
-1. Flash the ISO (see [FLASH.md](FLASH.md)).
-2. On the AMD + RTX 3090 desktop (e.g. LAN host `.70` / ROMED8):
-   - That machine currently boots **BIOS/legacy** (no EFI ESP on the NVMe).
-     The USB menu you see is **isolinux**, not UEFI GRUB.
-   - Prefer the Ubuntu GRUB entry **StickLLM USB (ephemeral)** (installed on
-     `.70`) — most reliable until the board is switched to full UEFI.
-   - Or use the firmware boot menu and pick the Samsung USB; wait for the
-     StickLLM isolinux menu (do not let a flash-timeout fall through to Ubuntu).
-   - Try a rear **USB2** port if USB3 ports are flaky.
-3. Leave internal disks alone — StickLLM will not use them for storage by default.
+Plugging the stick in does **not** force USB boot by itself. The PC firmware
+boot order does.
 
-If Windows on the internal disk comes back up, the firmware never selected the
-stick (or Secure Boot blocked it). That is a firmware/boot-menu issue, not a
-missing ISO.
+On the AMD/ROMED8 host (`.70`):
+
+1. Enter firmware setup (Del / F2).
+2. Put the **Samsung / STICKLLM USB** above the NVMe (Ubuntu).
+3. Save & exit.
+
+Until that is set, Ubuntu’s GRUB will keep winning after Ctrl+Alt+Del. You can
+still chainload StickLLM from Ubuntu GRUB, but USB-first is the reliable default.
+
+## StickLLM boot menu
+
+| # | Entry | What you get |
+|---|---|---|
+| **1** | **StickLLM** | LAN mode. Console shows **Loading LLM…** then **READY** with Chat UI + API URLs. Use a phone/browser. |
+| **2** | **StickLLM local chat** | Same services + console chat on this screen/keyboard. |
+| **3** | **StickLLM terminal + SSH** | Login on the console, or `ssh user@<ip>` — check `nvidia-smi`, `stickllm-status`. |
+| **4** | **StickLLM failsafe** | NVIDIA blacklisted + SSH/terminal for diagnosis. |
+
+Timeout is short (~5–8s); default is **1 StickLLM**.
+
+### Terminal / SSH credentials (menu 3)
+
+| | |
+|---|---|
+| User | `user` |
+| Password | `stickllm` |
+| Useful | `stickllm-status` · `nvidia-smi` · `curl -s localhost:8080/health` |
+
+SSH is **off** unless you pick menu **3** (or failsafe).
 
 ## Boot sequence (expected)
 
-1. UEFI loads GRUB from the stick.
-2. Select **StickLLM (ephemeral)** — default.
-3. Debian live boots to a minimal desktop/console session.
-4. NVIDIA driver loads; `nvidia-smi` shows the RTX 3090.
-5. `llama-server` starts with the bundled GGUF.
-6. Chat UI listens on `http://<lan-ip>/` and API on `http://<lan-ip>:8080/`.
+1. Firmware boots the USB (or Ubuntu GRUB → StickLLM entry).
+2. StickLLM menu → pick 1 / 2 / 3.
+3. Console: **Loading LLM…** (3–6 min cold boot on a 3090 is normal).
+4. **READY** with `http://<lan-ip>/` and API on port **8080**.
+5. Blank cursor during NVIDIA load is normal; watch the status lines.
 
-## First checks on the stick
+## First checks
 
 ```bash
-stickllm-status          # services, GPU, model path, LAN URL
-nvidia-smi               # must list RTX 3090
+stickllm-status
+nvidia-smi
 curl -s localhost:8080/health
 ```
 
-From a phone on the same LAN, open the URL printed by `stickllm-status`.
+Phone on the same LAN: open the Chat UI URL from the READY screen.
 
 ## If it fails
 
 | Symptom | Likely cause |
 |---|---|
-| Firmware ignores USB | Secure Boot still on; wrong USB port; legacy boot |
-| Black screen after GRUB | GPU init; try `nomodeset` only for diagnosis — CUDA needs proprietary driver |
-| `nvidia-smi` missing GPU | Driver package mismatch; confirm profile `amd-rtx3090` image |
-| UI up, empty replies | Model file missing — run **Download model** with network, or reflash with model baked in |
-| Phone cannot connect | Firewall / wrong IP / AP client isolation |
+| Lands in Ubuntu | Firmware boot order — USB not first |
+| Firmware ignores USB | Wrong port; try USB2; Secure Boot |
+| Black screen, no status | GPU init hang — reboot, pick **4 failsafe** |
+| UI up, empty replies | Model missing — rebuild with model baked in |
+| Phone cannot connect | Wrong IP / AP client isolation |
 
 ## Persist vs ephemeral
 
-- Default menu entry: ephemeral (RAM overlay; reboot wipes session).
-- **Persist config** (explicit): enables a labeled data partition for config only.
-- Chats still default to non-durable unless you export them (v0.1 has no chat DB sync).
+- Default: ephemeral (RAM; reboot wipes session).
+- **Persist config** is explicit only (`stickllm-persist`).

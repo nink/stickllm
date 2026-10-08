@@ -10,6 +10,10 @@
   <header class="top">
     <div class="brand">StickLLM</div>
     <div class="meta">
+      <label class="webToggle" title="Look up live web results when needed">
+        <input type="checkbox" id="webToggle" checked />
+        Web
+      </label>
       <span id="modeBadge" class="badge">ephemeral</span>
       <span id="statusLine" class="status">connecting…</span>
     </div>
@@ -18,12 +22,12 @@
   <main id="log" class="log" aria-live="polite"></main>
 
   <form id="composer" class="composer">
-    <textarea id="input" rows="2" placeholder="Message (stays on this LAN)" autocomplete="off"></textarea>
+    <textarea id="input" rows="2" placeholder="Ask anything (Web can look things up)" autocomplete="off"></textarea>
     <button type="submit" id="send">Send</button>
   </form>
 
   <footer class="foot">
-    Local only · API <code id="apiHint">/v1</code> · reboot clears this session
+    Local model + optional web search · API <code id="apiHint">/v1</code> · reboot clears session
   </footer>
 
   <script src="app.js"></script>
