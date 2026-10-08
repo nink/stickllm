@@ -3,11 +3,19 @@
 ## Before you boot
 
 1. Flash the ISO (see [FLASH.md](FLASH.md)).
-2. On the AMD + RTX 3090 desktop:
+2. On the AMD + RTX 3090 desktop (e.g. LAN host `.70`):
    - Enter firmware setup (Del / F2 / F10 — vendor specific).
    - **Disable Secure Boot** (required for v0.1 proprietary NVIDIA modules).
-   - Set USB as first boot device, or use the one-time boot menu (F12 / F8 / Esc).
+   - Prefer **UEFI** boot; disable CSM/Legacy if the board allows.
+   - Use the one-time boot menu (F11 / F12 / F8 / Esc) and pick the entry that
+     looks like **UEFI: Samsung…** / **UEFI USB Hard Disk** — not a plain
+     “USB” legacy entry and not the internal Windows disk.
+   - Try a rear **USB2** port if USB3 ports are ignored.
 3. Leave internal disks alone — StickLLM will not use them for storage by default.
+
+If Windows on the internal disk comes back up, the firmware never selected the
+stick (or Secure Boot blocked it). That is a firmware/boot-menu issue, not a
+missing ISO.
 
 ## Boot sequence (expected)
 

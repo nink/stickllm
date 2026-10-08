@@ -119,22 +119,12 @@ test -f config/includes.chroot/opt/stickllm/lib/libllama-server-impl.so
 test -f "config/includes.chroot/opt/stickllm/models/${MODEL_SHARD1}"
 
 mkdir -p config/bootloaders/grub-pc config/bootloaders/grub-efi
-cat > config/bootloaders/grub-efi/grub.cfg <<'EOF'
-set default=0
-set timeout=8
-menuentry "StickLLM ephemeral (amd-rtx3090) [default]" {
-    linux /live/vmlinuz boot=live components quiet username=user hostname=stickllm noeject nopersistence
-    initrd /live/initrd.img
-}
-menuentry "StickLLM with persistence (only if you ran stickllm-persist)" {
-    linux /live/vmlinuz boot=live components quiet username=user hostname=stickllm noeject persistence persistence-label=STICKLLM-DATA
-    initrd /live/initrd.img
-}
-menuentry "StickLLM failsafe (nomodeset - diagnose only)" {
-    linux /live/vmlinuz boot=live components username=user hostname=stickllm nomodeset noeject nopersistence
-    initrd /live/initrd.img
-}
-EOF
+# Prefer tracked boot/grub.cfg (LF). Fall back to inline copy if missing.
+if [[ -f /stickllm/boot/grub.cfg ]]; then
+  tr -d '\r' < /stickllm/boot/grub.cfg > config/bootloaders/grub-efi/grub.cfg
+else
+  cp /dev/null config/bootloaders/grub-efi/grub.cfg
+fi
 cp config/bootloaders/grub-efi/grub.cfg config/bootloaders/grub-pc/grub.cfg
 
 echo "[stickllm] lb build (long)…"
