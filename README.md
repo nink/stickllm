@@ -8,10 +8,10 @@ to the USB or internal disks unless you explicitly approve a write.
 
 | | |
 |---|---|
-| Repo | [github.com/nink/stickllm](https://github.com/nink/stickllm) |
+| Repo | [github.com/StickLLM/stickllm](https://github.com/StickLLM/stickllm) |
 | Version | **v0.2** (shipping) · **v0.3** in progress |
 | Profile | **AMD desktop CPU · 32 GB RAM · NVIDIA RTX 3090 (24 GB)** only |
-| Release | [v0.2.0](https://github.com/nink/stickllm/releases/tag/v0.2.0) |
+| Release | [v0.2.0](https://github.com/StickLLM/stickllm/releases/tag/v0.2.0) |
 
 ## Download v0.2 ISO (verify this hash)
 
