@@ -12,6 +12,8 @@ to the USB or internal disks unless you explicitly approve a write.
 | Version | **v0.2** (shipping) · **v0.3** in progress |
 | Profile | **AMD desktop CPU · 32 GB RAM · NVIDIA RTX 3090 (24 GB)** only |
 | Release | [v0.2.0](https://github.com/StickLLM/stickllm/releases/tag/v0.2.0) |
+| X / Twitter | [@stickllm](https://x.com/stickllm) |
+| Web | [stickllm.com](https://stickllm.com) · [stickllm.org](https://stickllm.org) |
 
 ## Download v0.2 ISO (verify this hash)
 
