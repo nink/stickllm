@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import sys
 import time
 import urllib.error
 import urllib.request
 
-# Prefer gateway (:80) so local chat can use web lookup too.
-API = os.environ.get("STICKLLM_API", "http://127.0.0.1").rstrip("/")
+# Local console uses the TLS gateway; self-signed cert is expected.
+API = os.environ.get("STICKLLM_API", "https://127.0.0.1").rstrip("/")
 TTY = os.environ.get("STICKLLM_TTY", "/dev/tty1")
+CTX = ssl._create_unverified_context()
+TOKEN: str | None = None
 
 
 def open_tty():
@@ -26,27 +29,57 @@ def write(stream, msg: str = "") -> None:
     stream.flush()
 
 
+def ensure_token() -> str | None:
+    global TOKEN
+    if TOKEN:
+        return TOKEN
+    try:
+        code = open("/run/stickllm/pair-code.txt", encoding="utf-8").read().strip()
+    except OSError:
+        code = ""
+    if not code:
+        return None
+    body = json.dumps({"code": code}).encode()
+    req = urllib.request.Request(
+        API + "/api/pair",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=CTX) as r:
+            data = json.loads(r.read().decode())
+        TOKEN = data.get("token")
+    except Exception:
+        TOKEN = None
+    return TOKEN
+
+
 def wait_ready(stream) -> None:
     write(stream, "StickLLM local — waiting for model…")
     deadline = time.time() + 600
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(API + "/health", timeout=2) as r:
+            with urllib.request.urlopen(API + "/health", timeout=2, context=CTX) as r:
                 if r.status == 200:
                     write(stream, "Model ready. Type a message (empty line quits).")
-                    write(stream, "LAN UI still available on port 80.\n")
+                    write(stream, "LAN UI: https://<lan-ip>/  (accept cert warning once)\n")
                     return
         except Exception:
             pass
         stream.write(".")
         stream.flush()
         time.sleep(2)
-    write(stream, "\nTimed out. Check stickllm-status / LAN http://IP/")
+    write(stream, "\nTimed out. Check stickllm-status / LAN https://IP/")
     sys.exit(1)
 
 
 def chat(messages: list[dict], prompt: str) -> str:
     messages.append({"role": "user", "content": prompt})
+    headers = {"Content-Type": "application/json"}
+    tok = ensure_token()
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
     body = json.dumps(
         {
             "model": "stickllm",
@@ -59,10 +92,10 @@ def chat(messages: list[dict], prompt: str) -> str:
     req = urllib.request.Request(
         API + "/v1/chat/completions",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=300) as r:
+    with urllib.request.urlopen(req, timeout=300, context=CTX) as r:
         data = json.loads(r.read().decode())
     reply = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
     messages.append({"role": "assistant", "content": reply})
@@ -75,16 +108,24 @@ def main() -> int:
         stream = sys.stdout
         stdin = sys.stdin
     else:
-        # Drive the console from the TTY for input as well.
         sys.stdin = stream
         stdin = stream
 
     try:
         stream.write("\033c")
         write(stream, "========================================")
-        write(stream, "  StickLLM LOCAL")
+        write(stream, "  StickLLM LOCAL — READY")
         write(stream, "========================================")
+        try:
+            code = open("/run/stickllm/pair-code.txt", encoding="utf-8").read().strip()
+        except OSError:
+            code = ""
+        if code:
+            write(stream, f"  PAIR CODE (LAN browser): {code}")
+            write(stream, "  Phone/PC → https://<lan-ip>/ → accept cert → Pair")
+        write(stream, "")
         wait_ready(stream)
+        ensure_token()
         messages = [
             {
                 "role": "system",

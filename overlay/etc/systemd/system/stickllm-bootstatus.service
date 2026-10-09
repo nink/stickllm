@@ -1,16 +1,27 @@
 [Unit]
-Description=StickLLM console boot status (tty1)
-After=network-online.target stickllm-console-setup.service
-Wants=network-online.target
-Before=stickllm-local.service
+Description=StickLLM console boot status (owns tty1)
+DefaultDependencies=no
+After=local-fs.target stickllm-console-setup.service
+Wants=stickllm-console-setup.service
+# Paint ASAP — do not wait for control/nvidia/llama.
+Before=getty@tty1.service
+Conflicts=getty@tty1.service
 
 [Service]
-Type=oneshot
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p /run/stickllm
+ExecStartPre=-/bin/bash -c 'printf "\\033c" > /dev/tty1'
 ExecStart=/usr/local/bin/stickllm-bootstatus
-RemainAfterExit=yes
+Restart=on-failure
+RestartSec=2
+StandardInput=tty
 StandardOutput=tty
-StandardError=tty
+StandardError=journal
 TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+Environment=STICKLLM_TTY=/dev/tty1
 
 [Install]
 WantedBy=multi-user.target

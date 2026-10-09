@@ -17,6 +17,7 @@ e2fsprogs
 fdisk
 util-linux
 python3
+openssl
 jq
 iproute2
 iputils-ping

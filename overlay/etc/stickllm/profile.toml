@@ -2,12 +2,13 @@
 # Runtime reads /etc/stickllm/profile.toml
 
 id = "amd-rtx3090"
+version = "0.3.0"
 default_mode = "ephemeral"
 
 [inference]
 binary = "/opt/stickllm/bin/llama-server"
 model = "/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
-host = "0.0.0.0"
+host = "127.0.0.1"
 port = 8080
 ctx_size = 8192
 n_gpu_layers = -1
@@ -15,4 +16,9 @@ threads = 8
 
 [ui]
 root = "/opt/stickllm/ui"
-port = 80
+port = 443
+http_redirect_port = 80
+chat_frontend = "auto"
+
+[network]
+tls = true

@@ -1,0 +1,14 @@
+[Unit]
+Description=StickLLM LAN TLS certificate bootstrap
+After=network-online.target stickllm-usb.service
+Wants=network-online.target
+Before=stickllm-ui.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/mkdir -p /var/lib/stickllm/tls /run/stickllm
+ExecStart=/usr/local/bin/stickllm-tls
+
+[Install]
+WantedBy=multi-user.target

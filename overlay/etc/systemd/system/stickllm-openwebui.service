@@ -1,0 +1,23 @@
+[Unit]
+Description=StickLLM Open WebUI trial (localhost)
+After=network-online.target stickllm-llama.service stickllm-control.service
+Wants=stickllm-llama.service
+# Absent install → unit fails; gateway falls back to native UI
+ConditionPathExists=/opt/stickllm/open-webui/bin/open-webui
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/stickllm/runtime.env
+Environment=STICKLLM_OPENWEBUI_HOST=127.0.0.1
+Environment=STICKLLM_OPENWEBUI_PORT=8081
+Environment=OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1
+ExecStart=/usr/local/bin/stickllm-openwebui
+Restart=on-failure
+RestartSec=5
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/stickllm /run/stickllm /mnt/stickllm-data /tmp /var/tmp
+
+[Install]
+WantedBy=multi-user.target

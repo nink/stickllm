@@ -23,6 +23,8 @@ models/*.sha256
 overlay/opt/stickllm/bin/llama-server
 overlay/opt/stickllm/lib/
 !overlay/opt/stickllm/lib/.gitkeep
+vendor/open-webui/
+*.image.tar
 
 # Local / OS
 .DS_Store

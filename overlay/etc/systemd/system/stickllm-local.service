@@ -17,7 +17,7 @@ StandardError=tty
 TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
-Environment=STICKLLM_API=http://127.0.0.1
+Environment=STICKLLM_API=https://127.0.0.1
 Environment=STICKLLM_TTY=/dev/tty1
 
 [Install]

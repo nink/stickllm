@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Launch Open WebUI (trial) against local llama-server. No-op if not installed.
+set -euo pipefail
+
+ROOT="${STICKLLM_OPENWEBUI_ROOT:-/opt/stickllm/open-webui}"
+HOST="${STICKLLM_OPENWEBUI_HOST:-127.0.0.1}"
+PORT="${STICKLLM_OPENWEBUI_PORT:-8081}"
+
+export HOST PORT
+export WEBUI_AUTH="${WEBUI_AUTH:-False}"
+# First-boot admin is created by stickllm-openwebui-bootstrap (not shown to LAN users).
+export ENABLE_SIGNUP="${ENABLE_SIGNUP:-True}"
+export ENABLE_OLLAMA_API="${ENABLE_OLLAMA_API:-False}"
+export OPENAI_API_BASE_URL="${OPENAI_API_BASE_URL:-http://127.0.0.1:8080/v1}"
+export OPENAI_API_BASE_URLS="${OPENAI_API_BASE_URLS:-$OPENAI_API_BASE_URL}"
+export OPENAI_API_KEY="${OPENAI_API_KEY:-stickllm}"
+export OPENAI_API_KEYS="${OPENAI_API_KEYS:-$OPENAI_API_KEY}"
+export ENABLE_OPENAI_API="${ENABLE_OPENAI_API:-True}"
+export DEFAULT_MODELS="${DEFAULT_MODELS:-stickllm}"
+export OFFLINE_MODE="${OFFLINE_MODE:-true}"
+export ENABLE_VERSION_UPDATE_CHECK="${ENABLE_VERSION_UPDATE_CHECK:-false}"
+export ENABLE_PERSISTENT_CONFIG="${ENABLE_PERSISTENT_CONFIG:-false}"
+export DATA_DIR="${DATA_DIR:-/var/lib/stickllm/open-webui}"
+mkdir -p "$DATA_DIR"
+
+if [[ -z "${WEBUI_SECRET_KEY:-}" ]]; then
+  if [[ -f /run/stickllm/webui-secret ]]; then
+    WEBUI_SECRET_KEY="$(cat /run/stickllm/webui-secret)"
+  else
+    WEBUI_SECRET_KEY="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    mkdir -p /run/stickllm
+    printf '%s' "$WEBUI_SECRET_KEY" >/run/stickllm/webui-secret
+    chmod 600 /run/stickllm/webui-secret
+  fi
+  export WEBUI_SECRET_KEY
+fi
+
+echo "stickllm-openwebui: ${HOST}:${PORT} → llama ${OPENAI_API_BASE_URL}" >&2
+
+if [[ -x "$ROOT/bin/open-webui" ]]; then
+  exec "$ROOT/bin/open-webui" serve --host "$HOST" --port "$PORT"
+fi
+if [[ -x "$ROOT/app/backend/start.sh" ]]; then
+  cd "$ROOT/app/backend"
+  exec bash ./start.sh
+fi
+if command -v open-webui >/dev/null 2>&1; then
+  exec open-webui serve --host "$HOST" --port "$PORT"
+fi
+
+echo "stickllm-openwebui: not installed at $ROOT — native StickLLM UI remains active" >&2
+exit 1

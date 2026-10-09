@@ -1,7 +1,8 @@
 [Unit]
 Description=StickLLM privileged control API (localhost)
 After=local-fs.target stickllm-console-setup.service
-Before=stickllm-ui.service stickllm-bootstatus.service
+# Do not block bootstatus — tty1 progress must paint even if control is slow.
+Before=stickllm-ui.service
 
 [Service]
 Type=simple

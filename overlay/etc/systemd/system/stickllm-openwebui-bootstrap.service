@@ -1,0 +1,15 @@
+[Unit]
+Description=StickLLM Open WebUI first-admin bootstrap
+After=stickllm-openwebui.service
+Wants=stickllm-openwebui.service
+ConditionPathExists=/opt/stickllm/open-webui/bin/open-webui
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/stickllm/runtime.env
+Environment=STICKLLM_OPENWEBUI_URL=http://127.0.0.1:8081
+ExecStart=/usr/local/bin/stickllm-openwebui-bootstrap
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

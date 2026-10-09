@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>StickLLM</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=9" />
 </head>
 <body>
   <header class="top">
@@ -44,6 +44,13 @@
     <div class="modelsPanel">
       <h2>Models &amp; storage</h2>
       <p id="modelsBody" class="modelsBody">Loading…</p>
+      <div id="dlProgress" class="dlProgress" hidden>
+        <div class="dlProgressLabel" id="dlProgressLabel">Downloading…</div>
+        <div class="dlProgressTrack" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="dlProgressBar">
+          <div class="dlProgressFill" id="dlProgressFill"></div>
+        </div>
+        <div class="dlProgressMeta" id="dlProgressMeta"></div>
+      </div>
       <div class="modelsActions">
         <button type="button" id="actClaim" class="actionBtn">Claim USB free space</button>
         <button type="button" id="actProbe" class="actionBtn">Probe VRAM / recommend</button>
@@ -51,8 +58,8 @@
         <button type="button" id="actRefresh" class="actionBtn">Refresh status</button>
       </div>
       <p class="modelsHint">
-        SSD encrypted cache is not enabled yet (opt-in later). Downloads go to USB DATA when claimed.
-        Pairing required — no SSH/sudo.
+        USB DATA is claimed automatically on boot when free space exists.
+        “Claim” only appears if that failed. Downloads go to USB DATA. Pairing required — no SSH/sudo.
       </p>
       <div id="catalogList" class="catalogList"></div>
       <menu>
@@ -72,6 +79,6 @@
     Paired LAN client · API <code id="apiHint">/v1</code> · reboot clears pair + session
   </footer>
 
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

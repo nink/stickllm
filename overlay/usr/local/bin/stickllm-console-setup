@@ -20,7 +20,24 @@ chmod 440 /etc/sudoers.d/stickllm-user
 # Quiet banner for SSH / console
 cat >/etc/motd <<'EOF'
 
-  StickLLM — ephemeral Privacy AI
-  stickllm-status   nvidia-smi   curl -s localhost:8080/health
+  StickLLM v0.3 — ephemeral Privacy AI (TLS on :443)
+  stickllm-status   nvidia-smi   curl -sk https://127.0.0.1/health
+  Pair code: cat /run/stickllm/pair-code.txt
+  tty1 = status/READY   |   tty2 = local login (Ctrl+Alt+F2)
 
 EOF
+
+# Term/local keyboard login on tty2 — tty1 is owned by bootstatus (pair code).
+systemctl enable getty@tty2.service 2>/dev/null || true
+systemctl start getty@tty2.service 2>/dev/null || true
+mkdir -p /etc/systemd/system/getty@tty1.service.d
+cat >/etc/systemd/system/getty@tty1.service.d/stickllm-conflict.conf <<'EOF'
+[Unit]
+# Server/Local/Term: stickllm-bootstatus owns tty1 for progress + pair code.
+ConflictedBy=stickllm-bootstatus.service
+EOF
+# Drop-in only applies after reload; without this getty can keep tty1.
+systemctl daemon-reload 2>/dev/null || true
+systemctl stop getty@tty1.service 2>/dev/null || true
+# Do not start bootstatus here — it After= this unit; starting it from
+# ExecStart would deadlock waiting for console-setup to finish.

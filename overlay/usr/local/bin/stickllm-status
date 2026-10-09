@@ -31,13 +31,22 @@ echo "llama:    $(systemctl is-active stickllm-llama.service 2>/dev/null || echo
 echo "ui:       $(systemctl is-active stickllm-ui.service 2>/dev/null || echo unknown)"
 echo
 
+echo "tls:      $(systemctl is-active stickllm-tls.service 2>/dev/null || echo unknown)"
+echo "webui:    $(systemctl is-active stickllm-openwebui.service 2>/dev/null || echo inactive)"
+echo "frontend: ${STICKLLM_CHAT_FRONTEND:-auto}"
+echo
+
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [[ -n "${IP:-}" ]]; then
-  echo "Chat UI:  http://${IP}/"
-  echo "API:      http://${IP}:8080/v1/chat/completions"
+  echo "Chat UI:  https://${IP}/"
+  echo "API:      https://${IP}/v1/chat/completions"
+  echo "Models:   https://${IP}/stickllm/"
 else
-  echo "Chat UI:  http://127.0.0.1/"
-  echo "API:      http://127.0.0.1:8080/v1/chat/completions"
+  echo "Chat UI:  https://127.0.0.1/"
+  echo "API:      https://127.0.0.1/v1/chat/completions"
+fi
+if [[ -f /var/lib/stickllm/tls/cert.pem ]]; then
+  echo "TLS FP:   $(openssl x509 -in /var/lib/stickllm/tls/cert.pem -noout -fingerprint -sha256 2>/dev/null | awk -F= '{print $2}')"
 fi
 
 if [[ -d /lib/live/mount/persistence ]] || mount | grep -q persistence; then

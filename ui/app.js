@@ -22,12 +22,137 @@
 
   const TOKEN_KEY = "stickllm_pair_token";
   let token = localStorage.getItem(TOKEN_KEY) || "";
+  let dlPollTimer = null;
+
+  let dlProgress = document.getElementById("dlProgress");
+  let dlProgressLabel = document.getElementById("dlProgressLabel");
+  let dlProgressFill = document.getElementById("dlProgressFill");
+  let dlProgressBar = document.getElementById("dlProgressBar");
+  let dlProgressMeta = document.getElementById("dlProgressMeta");
+  let lastDownload = {};
+  let modelLoading = false;
+  let loadPollTimer = null;
+
+  function ensureDlProgressDom() {
+    if (dlProgress && dlProgressFill) return;
+    const panel = modelsDialog?.querySelector(".modelsPanel");
+    if (!panel || !modelsBody) return;
+    const box = document.createElement("div");
+    box.id = "dlProgress";
+    box.className = "dlProgress";
+    box.hidden = true;
+    box.innerHTML =
+      '<div class="dlProgressLabel" id="dlProgressLabel">Downloading…</div>' +
+      '<div class="dlProgressTrack" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="dlProgressBar">' +
+      '<div class="dlProgressFill" id="dlProgressFill"></div></div>' +
+      '<div class="dlProgressMeta" id="dlProgressMeta"></div>';
+    modelsBody.insertAdjacentElement("afterend", box);
+    dlProgress = box;
+    dlProgressLabel = document.getElementById("dlProgressLabel");
+    dlProgressFill = document.getElementById("dlProgressFill");
+    dlProgressBar = document.getElementById("dlProgressBar");
+    dlProgressMeta = document.getElementById("dlProgressMeta");
+  }
+
+  function fmtBytes(n) {
+    if (!n || n < 0) return "—";
+    const gb = n / (1024 ** 3);
+    if (gb >= 1) return `${gb.toFixed(2)} GB`;
+    const mb = n / (1024 ** 2);
+    return `${mb.toFixed(0)} MB`;
+  }
+
+  function renderDownload(d) {
+    ensureDlProgressDom();
+    lastDownload = d || {};
+    if (!dlProgress) return false;
+    const state = d?.state || "idle";
+    if (state === "idle" || !state) {
+      dlProgress.hidden = true;
+      return false;
+    }
+    if (state === "done") {
+      dlProgress.hidden = false;
+      dlProgressLabel.textContent = `Downloaded: ${d.name || d.id || "model"}`;
+      dlProgressFill.style.width = "100%";
+      dlProgressBar.setAttribute("aria-valuenow", "100");
+      dlProgressMeta.textContent = "Complete — hash verified";
+      return true;
+    }
+    if (!["downloading", "verifying", "starting", "failed"].includes(state)) {
+      dlProgress.hidden = true;
+      return false;
+    }
+    dlProgress.hidden = false;
+    const pct = d.percent == null ? null : Number(d.percent);
+    const label =
+      state === "verifying"
+        ? `Verifying ${d.name || d.id || "model"}…`
+        : state === "failed"
+          ? `Download failed: ${d.name || d.id || "model"}`
+          : `Downloading ${d.name || d.id || "model"}…`;
+    dlProgressLabel.textContent = label;
+    if (pct == null) {
+      dlProgressFill.style.width = "15%";
+      dlProgressFill.style.opacity = "0.6";
+      dlProgressBar.setAttribute("aria-valuenow", "0");
+      dlProgressMeta.textContent = d.note || "in progress…";
+    } else {
+      dlProgressFill.style.opacity = "1";
+      dlProgressFill.style.width = `${Math.max(1, Math.min(100, pct))}%`;
+      dlProgressBar.setAttribute("aria-valuenow", String(Math.round(pct)));
+      dlProgressMeta.textContent = `${pct.toFixed(1)}% · ${fmtBytes(d.bytes_done)} / ${fmtBytes(d.bytes_total)}${d.file ? " · " + d.file : ""}`;
+    }
+    // Also mirror into status text so it's obvious even if bar CSS missing
+    if (modelsBody && state === "downloading" && pct != null) {
+      const base = modelsBody.textContent || "";
+      if (!base.includes("Download:")) {
+        /* keep storage lines; append handled in openModels */
+      }
+    }
+    return true;
+  }
+
+  function stopDlPoll() {
+    if (dlPollTimer) {
+      clearInterval(dlPollTimer);
+      dlPollTimer = null;
+    }
+  }
+
+  function startDlPoll() {
+    stopDlPoll();
+    dlPollTimer = setInterval(async () => {
+      if (!modelsDialog.open) {
+        stopDlPoll();
+        return;
+      }
+      try {
+        const st = await control("status");
+        const d = st.download || {};
+        renderDownload(d);
+        if (["downloading", "verifying", "starting"].includes(d.state)) {
+          renderStatus(st);
+          if (d.percent != null) {
+            modelsBody.textContent =
+              (modelsBody.dataset.baseStatus || modelsBody.textContent.split("\nDownload:")[0]) +
+              `\nDownload: ${d.name || d.id} — ${Number(d.percent).toFixed(1)}%` +
+              ` (${fmtBytes(d.bytes_done)} / ${fmtBytes(d.bytes_total)})`;
+          }
+          renderCatalog(st.catalog || []);
+        } else if (d.state === "done") {
+          renderStatus(st);
+          renderCatalog(st.catalog || []);
+        }
+      } catch (_) {}
+    }, 1500);
+  }
 
   const messages = [
     {
       role: "system",
       content:
-        "You are StickLLM, a local assistant on a Privacy AI USB. Be concise and helpful.",
+        "You are StickLLM, a local assistant on a Privacy AI USB. Be concise and helpful. Always use earlier turns in this conversation when answering follow-ups.",
     },
   ];
 
@@ -77,21 +202,110 @@
     return false;
   }
 
+  function setComposerLoading(loading) {
+    modelLoading = !!loading;
+    if (send) send.disabled = !!loading;
+    if (input) {
+      input.disabled = !!loading;
+      input.placeholder = loading
+        ? "Model loading into VRAM — wait…"
+        : "Ask anything (pair first if prompted)";
+    }
+  }
+
+  function stopLoadPoll() {
+    if (loadPollTimer) {
+      clearInterval(loadPollTimer);
+      loadPollTimer = null;
+    }
+  }
+
+  async function waitForModelReady(label) {
+    setComposerLoading(true);
+    statusLine.textContent = `loading ${label || "model"} into VRAM…`;
+    if (modelsBody) {
+      modelsBody.textContent =
+        `Loading ${label || "model"} into GPU VRAM…\n` +
+        "Chat is paused until READY (large models can take several minutes).";
+    }
+    stopLoadPoll();
+    const started = Date.now();
+    return new Promise((resolve) => {
+      loadPollTimer = setInterval(async () => {
+        const elapsed = Math.round((Date.now() - started) / 1000);
+        try {
+          const st = await control("status");
+          const llm = st.llm || {};
+          const name =
+            (llm.target || "").split("\n")[1] ||
+            (llm.target || "").split("\n")[0] ||
+            label ||
+            "model";
+          if (llm.ready && !llm.loading) {
+            stopLoadPoll();
+            setComposerLoading(false);
+            statusLine.textContent = "paired · model ready";
+            if (modelsBody) {
+              modelsBody.textContent = `READY — ${name} loaded (${elapsed}s)`;
+            }
+            resolve(true);
+            return;
+          }
+          statusLine.textContent = `loading ${name}… ${elapsed}s`;
+          if (modelsBody) {
+            modelsBody.textContent =
+              `Loading ${name} into GPU VRAM… ${elapsed}s\n` +
+              "Chat paused until health is green. Do not reboot.";
+          }
+        } catch (_) {
+          statusLine.textContent = `loading model… ${elapsed}s`;
+        }
+        if (elapsed > 900) {
+          stopLoadPoll();
+          setComposerLoading(false);
+          statusLine.textContent = "model load timed out — check stick";
+          resolve(false);
+        }
+      }, 2000);
+    });
+  }
+
   async function refreshStatus() {
     try {
+      // Prefer control status (includes llm.loading) when paired.
+      if (token) {
+        try {
+          const st = await control("status");
+          const llm = st.llm || {};
+          if (llm.loading || !llm.ready) {
+            setComposerLoading(true);
+            const name =
+              (llm.target || "").split("\n")[1] ||
+              (llm.target || "").split("\n")[0] ||
+              "model";
+            statusLine.textContent = `loading ${name} into VRAM…`;
+            return;
+          }
+          if (modelLoading) setComposerLoading(false);
+        } catch (_) {
+          /* fall through to /health */
+        }
+      }
       const r = await fetch(`/health`, { cache: "no-store" });
       if (!r.ok) throw new Error(`health ${r.status}`);
       const j = await r.json();
-      const paired = j.pair?.paired && token;
-      statusLine.textContent = paired
-        ? j.web
-          ? "paired · web on"
-          : "paired · LAN only"
-        : j.pair?.require_pair
-          ? "needs pair code (see stick screen)"
-          : j.web
-            ? "model ready · web on"
-            : "model ready";
+      const requirePair = !!j.pair?.require_pair;
+      const serverPaired = !!j.pair?.paired;
+      const clientPaired = !!(token && serverPaired);
+      if (!requirePair) {
+        statusLine.textContent = j.web ? "model ready · web on" : "model ready";
+      } else if (clientPaired) {
+        statusLine.textContent = j.web ? "paired · web on" : "paired · LAN only";
+      } else if (token && !serverPaired) {
+        statusLine.textContent = "pair expired — tap Pair for a new code";
+      } else {
+        statusLine.textContent = "needs pair code (see stick screen)";
+      }
       try {
         const m = await fetch("/stickllm.json", { cache: "no-store" });
         if (m.ok) {
@@ -100,14 +314,11 @@
           if (meta.version) modeBadge.title = `v${meta.version}`;
         }
       } catch (_) {}
-      if (j.pair?.require_pair && !token) {
-        // soft prompt once
-        if (!pairDialog.open) {
-          /* wait for user action */
-        }
-      }
     } catch (e) {
-      statusLine.textContent = "waiting for model…";
+      setComposerLoading(true);
+      statusLine.textContent = token
+        ? "paired · loading model into VRAM…"
+        : "waiting for model…";
     }
   }
 
@@ -134,7 +345,7 @@
     const active = j.active_model || "(default baked)";
     const lines = [
       s.mounted
-        ? `USB DATA: mounted (${s.free_gb ?? "?"} GiB free)`
+        ? `USB DATA: mounted (${s.free_gb ?? "?"} GiB free) — auto-claimed on boot`
         : `USB DATA: ${s.note || "not claimed"}`,
       `VRAM: ${j.vram_gb ?? p.vram_gb ?? "?"} GB`,
       p.recommend_name
@@ -143,7 +354,15 @@
       `Running: ${active}`,
       p.dest ? `Download dest: ${p.dest}` : "",
     ].filter(Boolean);
-    modelsBody.textContent = lines.join("\n");
+    const text = lines.join("\n");
+    modelsBody.textContent = text;
+    modelsBody.dataset.baseStatus = text;
+    // Claim is boot auto; only show the button when DATA is not mounted yet.
+    const claimBtn = document.getElementById("actClaim");
+    if (claimBtn) {
+      claimBtn.hidden = !!s.mounted;
+      claimBtn.textContent = "Claim USB free space";
+    }
   }
 
   function renderCatalog(models) {
@@ -152,13 +371,20 @@
       catalogList.textContent = "No catalog entries.";
       return;
     }
+    const dl = lastDownload || {};
+    const dlBusy = ["downloading", "verifying", "starting"].includes(dl.state);
     for (const m of models) {
       const row = document.createElement("div");
       row.className = "catalogRow";
       const meta = document.createElement("div");
+      const isThisDl = dlBusy && dl.id === m.id;
       const flags = [
         m.active ? "ACTIVE" : null,
-        m.installed ? "downloaded" : "not downloaded",
+        isThisDl
+          ? `DOWNLOADING ${dl.percent != null ? dl.percent.toFixed(0) + "%" : "…"}`
+          : m.installed
+            ? "downloaded"
+            : "not downloaded",
         m.fits_vram ? null : `needs ${m.min_vram_gb}GB VRAM`,
         m.vision ? "vision" : null,
         m.pinned ? null : "not pinned",
@@ -178,14 +404,18 @@
         runBtn.disabled = !!m.active;
         runBtn.addEventListener("click", async () => {
           runBtn.disabled = true;
-          runBtn.textContent = "Switching…";
+          runBtn.textContent = "Loading…";
           try {
-            modelsBody.textContent = `Activating ${m.id}…`;
+            modelsBody.textContent =
+              `Starting ${m.name || m.id}…\nRestarting llama-server — loading into VRAM.`;
+            statusLine.textContent = `loading ${m.name || m.id}…`;
+            setComposerLoading(true);
             const res = await control("model_activate", { id: m.id });
             if (!res.ok && res.error) throw new Error(res.error);
-            modelsBody.textContent = `Now running: ${res.active_model || m.id}`;
+            await waitForModelReady(res.name || m.name || m.id);
             await openModels();
           } catch (e) {
+            setComposerLoading(false);
             modelsBody.textContent = `Error: ${e.message}`;
             runBtn.disabled = false;
             runBtn.textContent = "Use this";
@@ -198,15 +428,32 @@
         const dlBtn = document.createElement("button");
         dlBtn.type = "button";
         dlBtn.className = "actionBtn";
-        dlBtn.textContent = "Download";
+        if (isThisDl) {
+          dlBtn.textContent =
+            dl.percent != null ? `${Number(dl.percent).toFixed(0)}%…` : "Downloading…";
+          dlBtn.disabled = true;
+        } else if (dlBusy) {
+          dlBtn.textContent = "Wait…";
+          dlBtn.disabled = true;
+        } else {
+          dlBtn.textContent = "Download";
+        }
         dlBtn.addEventListener("click", async () => {
           dlBtn.disabled = true;
-          dlBtn.textContent = "Downloading…";
+          dlBtn.textContent = "Starting…";
           try {
-            modelsBody.textContent = `Downloading ${m.id}… (may take a long time)`;
             const res = await control("model_download", { id: m.id });
-            modelsBody.textContent =
-              (res.stdout || "").slice(-1200) || JSON.stringify(res, null, 2);
+            const d = res.download || { state: "starting", name: m.name, id: m.id };
+            renderDownload(d);
+            if (res.already_running) {
+              modelsBody.textContent =
+                `Already downloading ${d.name || m.id}` +
+                (d.percent != null ? ` — ${Number(d.percent).toFixed(1)}%` : "") +
+                " (leave this panel open to watch)";
+            } else {
+              modelsBody.textContent = `Downloading ${m.name || m.id}…`;
+            }
+            startDlPoll();
             await openModels();
           } catch (e) {
             modelsBody.textContent = `Error: ${e.message}`;
@@ -242,9 +489,22 @@
     modelsBody.textContent = "Loading…";
     catalogList.textContent = "";
     modelsDialog.showModal();
+    ensureDlProgressDom();
+    startDlPoll();
     try {
       const st = await control("status");
       renderStatus(st);
+      const d = st.download || {};
+      renderDownload(d);
+      if (["downloading", "verifying", "starting"].includes(d.state)) {
+        const pct = d.percent != null ? `${Number(d.percent).toFixed(1)}%` : "…";
+        modelsBody.textContent =
+          (modelsBody.textContent ? modelsBody.textContent + "\n" : "") +
+          `Download: ${d.name || d.id || "model"} — ${pct}` +
+          (d.bytes_done
+            ? ` (${fmtBytes(d.bytes_done)} / ${fmtBytes(d.bytes_total)})`
+            : "");
+      }
       renderCatalog(st.catalog || []);
     } catch (e) {
       modelsBody.textContent = `Could not load: ${e.message}`;
@@ -253,6 +513,24 @@
 
   async function chat(userText) {
     if (!(await ensurePaired())) return;
+    if (modelLoading) {
+      addBubble("system", "Model is still loading into VRAM — wait for status to say ready.");
+      return;
+    }
+    // Fast preflight so we don't send a chat into a restarting llama.
+    try {
+      const h = await fetch("/health", { cache: "no-store" });
+      if (!h.ok) {
+        setComposerLoading(true);
+        statusLine.textContent = "loading model into VRAM…";
+        addBubble("system", "Model not ready yet (loading into GPU). Try again when status is ready.");
+        return;
+      }
+    } catch (_) {
+      setComposerLoading(true);
+      addBubble("system", "Model not ready yet (loading into GPU). Try again shortly.");
+      return;
+    }
     messages.push({ role: "user", content: userText });
     addBubble("user", userText);
     const assistantEl = addBubble("assistant", "…");
@@ -278,13 +556,27 @@
         await ensurePaired(true);
         return;
       }
+      if (r.status === 503 || r.status === 502) {
+        setComposerLoading(true);
+        assistantEl.classList.add("system");
+        assistantEl.lastChild.textContent =
+          "Model is loading into VRAM — chat paused. Wait for status “ready”, then retry.";
+        // drop the optimistic user turn from history so retry is clean
+        if (messages.length && messages[messages.length - 1].role === "user") {
+          messages.pop();
+        }
+        return;
+      }
       if (!r.ok) {
         const t = await r.text();
         throw new Error(t || `HTTP ${r.status}`);
       }
       const data = await r.json();
-      let reply =
+      const reply =
         data?.choices?.[0]?.message?.content?.trim() || "(empty response)";
+      // Keep history lean — sources are display-only (don't bloat context).
+      messages.push({ role: "assistant", content: reply });
+      let shown = reply;
       const webInfo = data?.stickllm_web;
       if (webInfo?.used && webInfo.results?.length) {
         const cites = webInfo.results
@@ -292,11 +584,10 @@
           .map((x) => x.url)
           .filter(Boolean);
         if (cites.length) {
-          reply += "\n\nSources:\n" + cites.map((u) => `• ${u}`).join("\n");
+          shown += "\n\nSources:\n" + cites.map((u) => `• ${u}`).join("\n");
         }
       }
-      messages.push({ role: "assistant", content: reply });
-      assistantEl.lastChild.textContent = reply;
+      assistantEl.lastChild.textContent = shown;
     } catch (err) {
       assistantEl.classList.add("system");
       assistantEl.lastChild.textContent = `Error: ${err.message}`;
@@ -330,14 +621,20 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code }),
+        credentials: "same-origin",
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.message || j.error || "Pair failed");
       token = j.token;
       localStorage.setItem(TOKEN_KEY, token);
       pairDialog.close();
-      statusLine.textContent = "paired";
+      statusLine.textContent = j.tls ? "paired · TLS · web on" : "paired · web on";
       addBubble("system", "Paired with StickLLM. Chat and Models menu are unlocked until reboot.");
+      if (j.chat_frontend === "openwebui" && !location.pathname.startsWith("/stickllm")) {
+        location.reload();
+        return;
+      }
+      await refreshStatus();
     } catch (e) {
       pairErr.textContent = e.message;
       pairErr.hidden = false;
@@ -370,22 +667,26 @@
     }
   });
   document.getElementById("actDownload")?.addEventListener("click", async () => {
-    modelsBody.textContent = "Downloading recommended model…";
+    modelsBody.textContent = "Starting recommended download…";
     try {
       const st = await control("status");
       const id = st.probe?.recommend_id;
       const res = await control("model_download", id ? { id } : {});
-      modelsBody.textContent = (res.stdout || JSON.stringify(res, null, 2)).slice(-1500);
-      await openModels();
+      modelsBody.textContent = res.already_running
+        ? "Download already in progress — see bar above."
+        : "Download started — see progress bar.";
+      renderDownload(res.download || { state: "starting" });
+      startDlPoll();
     } catch (e) {
       modelsBody.textContent = `Error: ${e.message}`;
     }
   });
   document.getElementById("actRefresh")?.addEventListener("click", () => openModels());
+  modelsDialog?.addEventListener("close", () => stopDlPoll());
 
   addBubble(
     "system",
-    "StickLLM v0.2 — pair with the code on the computer screen, then use Models for USB/downloads (no SSH)."
+    "StickLLM v0.3 — HTTPS + pair code on the computer screen. Models: USB/downloads (no SSH). Open WebUI when installed."
   );
   refreshStatus();
   setInterval(refreshStatus, 8000);

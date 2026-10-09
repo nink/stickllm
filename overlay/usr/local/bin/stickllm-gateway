@@ -1,27 +1,54 @@
 #!/usr/bin/env python3
-"""StickLLM UI + chat gateway: web lookup, pair auth, control proxy (LAN :80)."""
+"""StickLLM UI + chat gateway: pair auth, TLS, optional Open WebUI proxy."""
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import re
 import secrets
+import select
+import socket
+import ssl
+import threading
 import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-
 UI_ROOT = Path(os.environ.get("STICKLLM_UI", "/opt/stickllm/ui"))
 LLAMA = os.environ.get("STICKLLM_API", "http://127.0.0.1:8080").rstrip("/")
 CONTROL = os.environ.get("STICKLLM_CONTROL", "http://127.0.0.1:8091").rstrip("/")
+OPENWEBUI = os.environ.get("STICKLLM_OPENWEBUI_URL", "http://127.0.0.1:8081").rstrip("/")
 HOST = os.environ.get("STICKLLM_BIND", "0.0.0.0")
-PORT = int(os.environ.get("STICKLLM_PORT", "80"))
-UA = "StickLLM/0.2 (+local privacy USB; paired LAN client)"
+PORT = int(os.environ.get("STICKLLM_PORT", "443"))
+HTTP_PORT = int(os.environ.get("STICKLLM_HTTP_PORT", "80"))
+TLS_ENABLED = os.environ.get("STICKLLM_TLS", "1").strip().lower() not in ("0", "false", "no", "off")
+TLS_CERT = Path(os.environ.get("STICKLLM_TLS_CERT", "/var/lib/stickllm/tls/cert.pem"))
+TLS_KEY = Path(os.environ.get("STICKLLM_TLS_KEY", "/var/lib/stickllm/tls/key.pem"))
+CHAT_FRONTEND = os.environ.get("STICKLLM_CHAT_FRONTEND", "auto").strip().lower()
+UA = "StickLLM/0.3 (+local privacy USB; paired LAN client)"
+VERSION = "0.3"
 RUN_DIR = Path(os.environ.get("STICKLLM_RUN", "/run/stickllm"))
 AUTH_PATH = RUN_DIR / "auth.json"
+COOKIE_NAME = "stickllm_session"
+
+# StickLLM-owned paths — never send these to Open WebUI
+STICKLLM_PREFIXES = (
+    "/api/pair",
+    "/api/control",
+    "/api/storage",
+    "/api/models",
+    "/api/web",
+    "/api/health",
+    "/api/chat",
+    "/v1/",
+    "/health",
+    "/stickllm",
+)
 
 
 def http_json(url: str, payload: dict | None = None, timeout: int = 300, headers: dict | None = None) -> dict:
@@ -61,14 +88,52 @@ def save_auth(doc: dict) -> None:
         pass
 
 
-def token_ok(header: str | None, doc: dict) -> bool:
-    if not header:
+def token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def token_ok(token: str | None, doc: dict) -> bool:
+    if not token or not doc.get("paired"):
         return False
+    return token_hash(token) == doc.get("token_hash")
+
+
+def bearer_token(header: str | None) -> str | None:
+    if not header:
+        return None
     parts = header.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    return parts[1]
+
+
+def cookie_token(cookie_header: str | None) -> str | None:
+    if not cookie_header:
+        return None
+    c = SimpleCookie()
+    try:
+        c.load(cookie_header)
+    except Exception:
+        return None
+    morsel = c.get(COOKIE_NAME)
+    return morsel.value if morsel else None
+
+
+def openwebui_wanted() -> bool:
+    if CHAT_FRONTEND in ("native", "stickllm", "0", "false", "off"):
         return False
-    th = hashlib.sha256(parts[1].encode()).hexdigest()
-    return th == doc.get("token_hash") and bool(doc.get("paired"))
+    if CHAT_FRONTEND == "openwebui":
+        return True
+    # auto: use Open WebUI only when the unit/process is reachable
+    try:
+        with urllib.request.urlopen(OPENWEBUI + "/health", timeout=0.4) as r:
+            return 200 <= r.status < 500
+    except Exception:
+        try:
+            with urllib.request.urlopen(OPENWEBUI + "/", timeout=0.4) as r:
+                return 200 <= r.status < 500
+        except Exception:
+            return False
 
 
 def duckduckgo_search(query: str, n: int = 5) -> list[dict]:
@@ -134,6 +199,13 @@ def needs_web(text: str) -> bool:
     return any(k in t for k in keys) or bool(re.search(r"\b20\d{2}\b", t))
 
 
+def _clip(text: str, n: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= n:
+        return text
+    return text[: n - 1].rstrip() + "…"
+
+
 def augment_with_web(messages: list[dict], force: bool) -> tuple[list[dict], list[dict]]:
     user_text = ""
     for m in reversed(messages):
@@ -142,36 +214,66 @@ def augment_with_web(messages: list[dict], force: bool) -> tuple[list[dict], lis
             break
     if not user_text:
         return messages, []
-    if not force and not needs_web(user_text):
+    if not needs_web(user_text):
         return messages, []
 
-    hits = duckduckgo_search(user_text, n=5)
+    hits = duckduckgo_search(user_text, n=3)
     page = ""
     if hits and hits[0].get("url"):
-        page = fetch_url(hits[0]["url"])
+        page = _clip(fetch_url(hits[0]["url"]), 1200)
 
-    block_lines = ["Live web results (fetched just now for this answer):"]
+    block_lines = ["Live web results (for this answer only — still use earlier chat turns):"]
     for i, h in enumerate(hits, 1):
-        block_lines.append(f"{i}. {h['title']}\n   {h['url']}\n   {h['snippet']}")
+        block_lines.append(
+            f"{i}. {_clip(h.get('title', ''), 120)}\n"
+            f"   {_clip(h.get('url', ''), 200)}\n"
+            f"   {_clip(h.get('snippet', ''), 240)}"
+        )
     if page:
         block_lines.append("\nTop-page excerpt:\n" + page)
-    block = "\n".join(block_lines)
+    block = _clip("\n".join(block_lines), 2800)
 
-    sys = {
-        "role": "system",
-        "content": (
+    sys_parts = [
+        str(m.get("content") or "").strip()
+        for m in messages
+        if m.get("role") == "system" and str(m.get("content") or "").strip()
+    ]
+    if not sys_parts:
+        sys_parts = [
             "You are StickLLM with optional live web lookup. "
-            "Use the provided web results when relevant. "
-            "Cite URLs briefly. If results are weak, say so. Be concise."
-        ),
-    }
+            "Use prior conversation turns. Cite URLs briefly when using web results."
+        ]
+    sys_parts.append(
+        "Use earlier turns in this conversation. "
+        "Web results below supplement the latest question; they do not replace chat history."
+    )
+    sys_msg = {"role": "system", "content": "\n\n".join(sys_parts)}
+
     rest = [m for m in messages if m.get("role") != "system"]
-    web_note = {"role": "user", "content": block + "\n\nUser question:\n" + user_text}
+    if len(rest) > 24:
+        rest = rest[-24:]
+    web_note = {
+        "role": "user",
+        "content": block + "\n\nUser question:\n" + user_text,
+    }
     if rest and rest[-1].get("role") == "user":
         rest = rest[:-1] + [web_note]
     else:
         rest = rest + [web_note]
-    return [sys] + rest, hits
+    return [sys_msg] + rest, hits
+
+
+def read_json_safe(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def is_stickllm_path(path: str) -> bool:
+    if path.startswith("/stickllm"):
+        return True
+    return any(path == p or path.startswith(p) for p in STICKLLM_PREFIXES)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -184,35 +286,150 @@ class Handler(SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        if path.endswith((".js", ".css", ".html")) or path in ("/", ""):
+        if path.endswith((".js", ".css", ".html")) or path in ("/", "", "/stickllm", "/stickllm/"):
             self.send_header("Cache-Control", "no-store, max-age=0")
             self.send_header("Pragma", "no-cache")
         super().end_headers()
 
-    def _send(self, code: int, body: bytes, ctype: str = "application/json") -> None:
+    def _send(self, code: int, body: bytes, ctype: str = "application/json", extra: list[tuple[str, str]] | None = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if extra:
+            for k, v in extra:
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
-    def _json(self, code: int, obj: dict) -> None:
-        self._send(code, json.dumps(obj).encode())
+    def _json(self, code: int, obj: dict, extra: list[tuple[str, str]] | None = None) -> None:
+        self._send(code, json.dumps(obj).encode(), extra=extra)
+
+    def _session_token(self) -> str | None:
+        return bearer_token(self.headers.get("Authorization")) or cookie_token(self.headers.get("Cookie"))
 
     def _auth(self) -> tuple[dict, bool]:
         doc = load_auth()
-        ok = token_ok(self.headers.get("Authorization"), doc)
+        ok = token_ok(self._session_token(), doc)
         return doc, ok
+
+    def _set_session_cookie(self, token: str) -> list[tuple[str, str]]:
+        flags = f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict"
+        if TLS_ENABLED:
+            flags += "; Secure"
+        return [("Set-Cookie", flags)]
+
+    def _native_ui(self) -> None:
+        # Map /stickllm → static UI root
+        parsed = urllib.parse.urlparse(self.path)
+        rel = parsed.path
+        if rel.startswith("/stickllm"):
+            rel = rel[len("/stickllm") :] or "/"
+            self.path = rel + (("?" + parsed.query) if parsed.query else "")
+        return super().do_GET()
+
+    def _proxy_openwebui(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        target = urllib.parse.urlparse(OPENWEBUI)
+        conn_host = target.hostname or "127.0.0.1"
+        conn_port = target.port or 80
+        path = parsed.path or "/"
+        if parsed.query:
+            path = path + "?" + parsed.query
+
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else None
+
+        headers = {}
+        for key in (
+            "Content-Type",
+            "Accept",
+            "Accept-Language",
+            "Accept-Encoding",
+            "User-Agent",
+            "Origin",
+            "Referer",
+            "Cookie",  # Open WebUI session (separate from StickLLM pair cookie)
+            "Authorization",
+        ):
+            val = self.headers.get(key)
+            if val:
+                headers[key] = val
+        headers["Host"] = f"{conn_host}:{conn_port}"
+        headers["X-Forwarded-Proto"] = "https" if TLS_ENABLED else "http"
+        headers["X-Forwarded-Host"] = self.headers.get("Host", "stickllm")
+        headers["X-Forwarded-For"] = self.client_address[0]
+        if self.headers.get("Upgrade"):
+            headers["Upgrade"] = self.headers.get("Upgrade")
+            headers["Connection"] = self.headers.get("Connection", "upgrade")
+            headers["Sec-WebSocket-Key"] = self.headers.get("Sec-WebSocket-Key", "")
+            headers["Sec-WebSocket-Version"] = self.headers.get("Sec-WebSocket-Version", "")
+            headers["Sec-WebSocket-Extensions"] = self.headers.get("Sec-WebSocket-Extensions", "")
+
+        try:
+            conn = http.client.HTTPConnection(conn_host, conn_port, timeout=600)
+            conn.putrequest(self.command, path, skip_host=True, skip_accept_encoding=True)
+            for k, v in headers.items():
+                if v:
+                    conn.putheader(k, v)
+            if body is not None:
+                conn.putheader("Content-Length", str(len(body)))
+            conn.endheaders()
+            if body:
+                conn.send(body)
+
+            resp = conn.getresponse()
+            # WebSocket upgrade: tunnel bytes both ways
+            if resp.status == 101:
+                self.send_response(101, resp.reason)
+                for k, v in resp.getheaders():
+                    if k.lower() in ("transfer-encoding", "content-length"):
+                        continue
+                    self.send_header(k, v)
+                self.end_headers()
+                self._tunnel(conn.sock, self.connection)
+                return
+
+            data = resp.read()
+            self.send_response(resp.status, resp.reason)
+            for k, v in resp.getheaders():
+                kl = k.lower()
+                if kl in ("transfer-encoding", "connection", "keep-alive"):
+                    continue
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            conn.close()
+        except Exception as e:
+            self._json(502, {"error": f"openwebui_proxy: {e}"})
+
+    def _tunnel(self, a: socket.socket, b: socket.socket) -> None:
+        try:
+            while True:
+                r, _, _ = select.select([a, b], [], [], 300)
+                if not r:
+                    break
+                for s in r:
+                    other = b if s is a else a
+                    data = s.recv(65536)
+                    if not data:
+                        return
+                    other.sendall(data)
+        except Exception:
+            return
 
     def do_GET(self) -> None:  # noqa: N802
         path = urllib.parse.urlparse(self.path).path
+
         if path in ("/health", "/api/health"):
             try:
                 data = http_json(LLAMA + "/health", timeout=3)
                 data["gateway"] = "ok"
                 data["web"] = True
-                data["version"] = "0.2"
+                data["version"] = VERSION
+                data["tls"] = TLS_ENABLED
+                data["chat_frontend"] = "openwebui" if openwebui_wanted() else "native"
                 auth = load_auth()
                 data["pair"] = {
                     "require_pair": bool(auth.get("require_pair", True)),
@@ -220,8 +437,9 @@ class Handler(SimpleHTTPRequestHandler):
                 }
                 self._json(200, data)
             except Exception as e:
-                self._json(503, {"status": "down", "error": str(e)})
+                self._json(503, {"status": "down", "error": str(e), "version": VERSION, "tls": TLS_ENABLED})
             return
+
         if path == "/api/pair/status":
             auth = load_auth()
             self._json(
@@ -229,11 +447,13 @@ class Handler(SimpleHTTPRequestHandler):
                 {
                     "require_pair": bool(auth.get("require_pair", True)),
                     "paired": bool(auth.get("paired")),
-                    # Never expose the pair code over the network
+                    "tls": TLS_ENABLED,
+                    "chat_frontend": "openwebui" if openwebui_wanted() else "native",
                     "hint": "Enter the 6-digit code shown on the StickLLM computer screen.",
                 },
             )
             return
+
         if path in ("/api/storage", "/api/models/status"):
             doc, ok = self._auth()
             if doc.get("require_pair") and not ok:
@@ -244,8 +464,9 @@ class Handler(SimpleHTTPRequestHandler):
                 "note": "USB data not claimed yet",
             }
             probe = read_json_safe(RUN_DIR / "model-probe.json") or {}
-            self._json(200, {"version": "0.2", "storage": storage, "probe": probe})
+            self._json(200, {"version": VERSION, "storage": storage, "probe": probe})
             return
+
         if path == "/api/web/search":
             doc, ok = self._auth()
             if doc.get("require_pair") and not ok:
@@ -255,10 +476,32 @@ class Handler(SimpleHTTPRequestHandler):
             hits = duckduckgo_search(q or "StickLLM", n=5)
             self._json(200, {"results": hits})
             return
-        return super().do_GET()
+
+        # Native StickLLM UI (pair / Models) always available here
+        if path.startswith("/stickllm"):
+            return self._native_ui()
+
+        # Open WebUI trial (paired browsers only)
+        if openwebui_wanted() and not is_stickllm_path(path):
+            doc, ok = self._auth()
+            if doc.get("require_pair") and not ok:
+                # Send them to native pair UI
+                self.path = "/"
+                return self._native_ui()
+            return self._proxy_openwebui()
+
+        return self._native_ui()
 
     def do_POST(self) -> None:  # noqa: N802
         path = urllib.parse.urlparse(self.path).path
+
+        if openwebui_wanted() and not is_stickllm_path(path):
+            doc, ok = self._auth()
+            if doc.get("require_pair") and not ok:
+                self._json(401, {"error": "pair_required"})
+                return
+            return self._proxy_openwebui()
+
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(n) if n else b"{}"
         try:
@@ -276,25 +519,29 @@ class Handler(SimpleHTTPRequestHandler):
             if hashlib.sha256(code.encode()).hexdigest() != auth.get("code_hash"):
                 self._json(403, {"error": "bad_code", "message": "Wrong code — check the stick screen."})
                 return
-            # Issue session token (prefer pending, else mint new)
             token = auth.get("pending_token") or secrets.token_urlsafe(32)
-            auth["token_hash"] = hashlib.sha256(token.encode()).hexdigest()
+            auth["token_hash"] = token_hash(token)
             auth["paired"] = True
             auth.pop("pending_token", None)
-            # Invalidate code after successful pair (one-time)
             auth["code_hash"] = hashlib.sha256(secrets.token_bytes(16)).hexdigest()
             try:
                 (RUN_DIR / "pair-code.txt").unlink(missing_ok=True)
             except Exception:
                 pass
             save_auth(auth)
+            msg = "Paired. This browser can chat and manage models until reboot."
+            if openwebui_wanted():
+                msg += " Chat frontend: Open WebUI (StickLLM Models at /stickllm/)."
             self._json(
                 200,
                 {
                     "ok": True,
                     "token": token,
-                    "message": "Paired. This browser can chat and manage models until reboot.",
+                    "tls": TLS_ENABLED,
+                    "chat_frontend": "openwebui" if openwebui_wanted() else "native",
+                    "message": msg,
                 },
+                extra=self._set_session_cookie(token),
             )
             return
 
@@ -306,7 +553,6 @@ class Handler(SimpleHTTPRequestHandler):
             action = str(req.get("action") or "")
             params = req.get("params") if isinstance(req.get("params"), dict) else {}
             try:
-                # Downloads can take a long time
                 timeout = 7200 if action == "model_download" else 180
                 data = http_json(
                     CONTROL + "/action",
@@ -329,12 +575,12 @@ class Handler(SimpleHTTPRequestHandler):
 
         messages = list(req.get("messages") or [])
         web_mode = req.get("web", "auto")
-        if web_mode is True or web_mode == "on":
-            force, use = True, True
-        elif web_mode is False or web_mode == "off":
-            force, use = False, False
+        if web_mode is True or web_mode == "on" or web_mode == "auto":
+            use = True
+            force = False
         else:
-            force, use = False, True
+            use = False
+            force = False
 
         hits: list[dict] = []
         out_messages = messages
@@ -361,18 +607,96 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception as e:
             self._json(502, {"error": str(e), "trace": traceback.format_exc()[-500:]})
 
+    def do_PUT(self) -> None:  # noqa: N802
+        if openwebui_wanted() and not is_stickllm_path(urllib.parse.urlparse(self.path).path):
+            doc, ok = self._auth()
+            if doc.get("require_pair") and not ok:
+                self._json(401, {"error": "pair_required"})
+                return
+            return self._proxy_openwebui()
+        self._json(405, {"error": "method not allowed"})
 
-def read_json_safe(path: Path) -> dict | None:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
+    def do_DELETE(self) -> None:  # noqa: N802
+        if openwebui_wanted() and not is_stickllm_path(urllib.parse.urlparse(self.path).path):
+            doc, ok = self._auth()
+            if doc.get("require_pair") and not ok:
+                self._json(401, {"error": "pair_required"})
+                return
+            return self._proxy_openwebui()
+        self._json(405, {"error": "method not allowed"})
+
+
+class RedirectHandler(SimpleHTTPRequestHandler):
+    """HTTP :80 → HTTPS :443 (pairing and chat are TLS-only when TLS is on)."""
+
+    def log_message(self, fmt: str, *args) -> None:
+        pass
+
+    def do_GET(self) -> None:  # noqa: N802
+        host = self.headers.get("Host", "stickllm").split(":")[0]
+        loc = f"https://{host}:{PORT}{self.path}"
+        body = b"Redirecting to HTTPS\n"
+        self.send_response(301)
+        self.send_header("Location", loc)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    do_POST = do_GET  # noqa: N815
+    do_HEAD = do_GET  # noqa: N815
+
+
+class ThreadingTLSServer(ThreadingHTTPServer):
+    # ThreadingHTTPServer already includes ThreadingMixIn — do not mix it again (MRO error).
+    daemon_threads = True
+
+
+def resolve_tls_paths() -> tuple[Path, Path]:
+    candidates = [
+        (TLS_CERT, TLS_KEY),
+        (Path("/mnt/stickllm-data/tls/cert.pem"), Path("/mnt/stickllm-data/tls/key.pem")),
+        (Path("/var/lib/stickllm/tls/cert.pem"), Path("/var/lib/stickllm/tls/key.pem")),
+    ]
+    for crt, key in candidates:
+        if crt.is_file() and key.is_file():
+            return crt, key
+    return TLS_CERT, TLS_KEY
 
 
 def main() -> int:
     os.chdir(UI_ROOT)
-    httpd = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"stickllm-gateway on http://{HOST}:{PORT} → {LLAMA} control={CONTROL}", flush=True)
+    httpd = ThreadingTLSServer((HOST, PORT), Handler)
+
+    if TLS_ENABLED:
+        crt, key = resolve_tls_paths()
+        if not crt.is_file() or not key.is_file():
+            # Best-effort generate via helper
+            os.system("/usr/local/bin/stickllm-tls >/dev/null 2>&1")
+            crt, key = resolve_tls_paths()
+        if not crt.is_file() or not key.is_file():
+            print(f"stickllm-gateway: TLS requested but cert missing ({crt})", flush=True)
+            return 1
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(str(crt), str(key))
+        httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+        scheme = "https"
+        if HTTP_PORT > 0 and HTTP_PORT != PORT:
+            redir = ThreadingHTTPServer((HOST, HTTP_PORT), RedirectHandler)
+
+            def _run_redir() -> None:
+                print(f"stickllm-gateway redirect http://{HOST}:{HTTP_PORT} → https :{PORT}", flush=True)
+                redir.serve_forever()
+
+            threading.Thread(target=_run_redir, name="http-redirect", daemon=True).start()
+    else:
+        scheme = "http"
+
+    print(
+        f"stickllm-gateway on {scheme}://{HOST}:{PORT} → {LLAMA} "
+        f"control={CONTROL} frontend={CHAT_FRONTEND} openwebui={OPENWEBUI}",
+        flush=True,
+    )
     httpd.serve_forever()
     return 0
 

@@ -131,16 +131,17 @@ token unlocks chat + Models control (USB claim / download). The code is
 one-time; reboot clears pair state.
 
 This stops casual LAN strangers from using the stick **after** you pair from a
-trusted browser. It does **not** stop a sniffer who sees the HTTP token after
-pairing, or someone who can read the stick screen. TLS for the tunnel is next.
+trusted browser. It does **not** stop someone who can read the stick screen.
+v0.3 adds **TLS** so a passive LAN sniffer cannot read the session token or prompts
+in cleartext (you still must accept the stick’s self-signed cert once).
 
-### Network & browser (v0.1 today)
+### Network & browser (v0.3)
 
 | Risk | Reality |
 |---|---|
-| **Plaintext HTTP** | Chat UI and API are **not TLS**. Same-LAN sniffing (evil Wi‑Fi, compromised router, mirrored port) can read prompts. |
-| **No authentication** | Anyone who can open `http://<stick-ip>/` can chat and hit `:8080`. |
-| **WAN exposure** | If you port-forward or put the stick on the public internet, treat it as world-readable/world-usable. **Don’t.** |
+| **Self-signed TLS** | HTTPS on :443 encrypts LAN traffic. Browsers warn until you trust the cert; compare the fingerprint on the READY screen. |
+| **Pairing** | Chat/Models require the on-screen pair code (session token + cookie). Raw llama `:8080` is loopback-only. |
+| **WAN exposure** | If you port-forward or put the stick on the public internet, treat it as hostile. **Don’t.** |
 | **Browser leftovers** | Phone/PC browser history, cache, OS backups, and screenshots are outside StickLLM. |
 | **Web toggle** | With **Web** on, queries/snippets leave the stick to search/fetch. That path is intentional and visible — turn Web off for air‑gapped answers. |
 

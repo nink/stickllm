@@ -179,6 +179,213 @@ def enrich_models(vram_gb: float | None = None) -> list[dict]:
     return models
 
 
+def download_progress() -> dict:
+    """Best-effort download progress from progress file or *.partial sizes."""
+    prog = read_json(RUN / "download-progress.json")
+    if prog.get("state") in ("downloading", "verifying", "starting"):
+        # If the final GGUF is already present and no .partial remains, treat as done
+        # (avoids a stuck 99% bar after mv/hash).
+        mid = prog.get("id") or ""
+        still_partial = False
+        for d in model_dirs():
+            try:
+                if any(d.glob("*.partial")):
+                    still_partial = True
+                    break
+            except OSError:
+                pass
+        if not still_partial and mid and not download_running():
+            for m in parse_catalog():
+                if m.get("id") == mid:
+                    files = m.get("hf_files") or []
+                    if files and all(find_file(f) for f in files):
+                        return {
+                            "state": "done",
+                            "id": mid,
+                            "name": m.get("name", mid),
+                            "percent": 100.0,
+                            "bytes_done": prog.get("bytes_total") or 0,
+                            "bytes_total": prog.get("bytes_total") or 0,
+                            "note": "complete",
+                        }
+        return prog
+
+    # Infer from in-flight .partial files (works even if writer isn't running yet).
+    partials: list[tuple[Path, int]] = []
+    for d in model_dirs():
+        try:
+            for p in d.glob("*.partial"):
+                try:
+                    partials.append((p, p.stat().st_size))
+                except OSError:
+                    pass
+        except OSError:
+            pass
+    if not partials:
+        # Also detect active download process
+        try:
+            p = subprocess.run(
+                ["pgrep", "-f", "stickllm-download-model|curl.*huggingface"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if p.returncode == 0 and p.stdout.strip():
+                return {
+                    "state": "downloading",
+                    "id": "",
+                    "name": "model download",
+                    "percent": None,
+                    "bytes_done": 0,
+                    "bytes_total": 0,
+                    "note": "download running (size unknown yet)",
+                }
+        except Exception:
+            pass
+        return {"state": "idle"}
+
+    # Prefer largest partial; match catalog entry by filename stem
+    partials.sort(key=lambda x: -x[1])
+    path, done = partials[0]
+    base = path.name[: -len(".partial")] if path.name.endswith(".partial") else path.name
+    models = parse_catalog()
+    match = None
+    for m in models:
+        files = m.get("hf_files") or []
+        if base in files or any(base == f or f.endswith(base) for f in files):
+            match = m
+            break
+    total = 0
+    if match:
+        total = int(float(match.get("approx_size_gb") or 0) * (1024**3))
+        # If multi-file, scale roughly by file count
+        n = max(len(match.get("hf_files") or []), 1)
+        if n > 1:
+            total = max(total // n, done)
+    percent = None
+    if total > 0:
+        percent = max(0.0, min(99.5, round(100.0 * done / total, 1)))
+    return {
+        "state": "downloading",
+        "id": (match or {}).get("id", ""),
+        "name": (match or {}).get("name", base),
+        "file": base,
+        "percent": percent,
+        "bytes_done": done,
+        "bytes_total": total,
+        "path": str(path),
+    }
+
+
+def download_running() -> bool:
+    try:
+        p = subprocess.run(
+            ["pgrep", "-f", "/usr/local/bin/stickllm-download-model"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return p.returncode == 0 and bool(p.stdout.strip())
+    except Exception:
+        return False
+
+
+def maybe_resume_stalled_download() -> dict | None:
+    """If a .partial exists but no downloader is running, poke it again.
+
+    Called from status polling so the Models UI watchdog can recover HF drops
+    without the user noticing a frozen 50% bar forever.
+    """
+    import time
+
+    prog = download_progress()
+    if prog.get("state") == "done":
+        return None
+    if download_running():
+        return None
+    # Need an incomplete partial to resume
+    has_partial = False
+    partial_id = ""
+    for d in model_dirs():
+        try:
+            for p in d.glob("*.partial"):
+                if p.stat().st_size > 1_000_000:
+                    has_partial = True
+                    base = p.name[: -len(".partial")]
+                    for m in parse_catalog():
+                        if base in (m.get("hf_files") or []):
+                            partial_id = m["id"]
+                            break
+                    break
+        except OSError:
+            pass
+        if has_partial:
+            break
+    if not has_partial:
+        return None
+
+    stamp = RUN / "download-watchdog.json"
+    now = int(time.time())
+    last = read_json(stamp)
+    # Cooldown 90s so status polls don't fork a storm
+    if now - int(last.get("last_resume") or 0) < 90:
+        return {"skipped": True, "reason": "cooldown"}
+
+    mid = partial_id or str(prog.get("id") or "")
+    cmd = ["/usr/local/bin/stickllm-download-model", "--i-understand"]
+    if mid:
+        cmd += ["--id", mid]
+    RUN.mkdir(parents=True, exist_ok=True)
+    log = RUN / "download.log"
+    with open(log, "ab") as lf:
+        lf.write(f"\n# watchdog resume {now} id={mid}\n".encode())
+        subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, start_new_session=True)
+    stamp.write_text(
+        json.dumps({"last_resume": now, "id": mid, "reason": "stalled_partial"}) + "\n",
+        encoding="utf-8",
+    )
+    return {"resumed": True, "id": mid}
+
+
+def llm_ready() -> bool:
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=2) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def load_status() -> dict:
+    phase = ""
+    target = ""
+    try:
+        if (RUN / "load-phase.txt").is_file():
+            phase = (RUN / "load-phase.txt").read_text(encoding="utf-8").strip()
+        if (RUN / "load-model.txt").is_file():
+            target = (RUN / "load-model.txt").read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    ready = llm_ready()
+    if ready and phase in ("loading", "restarting"):
+        try:
+            (RUN / "load-phase.txt").write_text("ready\n", encoding="utf-8")
+            phase = "ready"
+        except Exception:
+            phase = "ready"
+    loading = (not ready) or phase in ("loading", "restarting")
+    return {
+        "ready": ready,
+        "loading": loading,
+        "phase": phase or ("ready" if ready else "down"),
+        "target": target,
+        "active_model": active_model_path(),
+    }
+
+
 def activate_model(model_id: str) -> dict:
     models = enrich_models()
     m = next((x for x in models if x["id"] == model_id), None)
@@ -196,6 +403,8 @@ def activate_model(model_id: str) -> dict:
         return {"ok": False, "error": "model file missing"}
     RUN.mkdir(parents=True, exist_ok=True)
     (RUN / "model.env").write_text(f"STICKLLM_MODEL={path}\n", encoding="utf-8")
+    (RUN / "load-phase.txt").write_text("loading\n", encoding="utf-8")
+    (RUN / "load-model.txt").write_text(f"{model_id}\n{m.get('name', model_id)}\n", encoding="utf-8")
     try:
         cur = RUN / "current.gguf"
         if cur.exists() or cur.is_symlink():
@@ -203,11 +412,16 @@ def activate_model(model_id: str) -> dict:
         cur.symlink_to(path)
     except Exception:
         pass
+    # Restart returns when the process is spawned — VRAM load continues after.
     r = sh(["systemctl", "restart", "stickllm-llama.service"], timeout=60)
+    (RUN / "load-phase.txt").write_text("loading\n", encoding="utf-8")
     r["ok"] = r.get("code", 1) == 0
+    r["loading"] = True
     r["active_model"] = path
     r["id"] = model_id
+    r["name"] = m.get("name", model_id)
     r["models"] = enrich_models()
+    r["llm"] = load_status()
     return r
 
 
@@ -215,6 +429,7 @@ def handle(action: str, params: dict) -> dict:
     if action == "status":
         vram = detect_vram_gb()
         models = enrich_models(vram)
+        watchdog = maybe_resume_stalled_download()
         return {
             "ok": True,
             "storage": read_json(RUN / "storage.json"),
@@ -225,6 +440,9 @@ def handle(action: str, params: dict) -> dict:
             "vram_gb": round(vram, 1),
             "active_model": active_model_path(),
             "catalog": models,
+            "download": download_progress(),
+            "download_watchdog": watchdog,
+            "llm": load_status(),
         }
     if action == "usb_claim":
         r = sh(["/usr/local/bin/stickllm-usb-claim", "--auto", "--yes"], timeout=180)
@@ -237,12 +455,34 @@ def handle(action: str, params: dict) -> dict:
         return r
     if action == "model_download":
         mid = str(params.get("id") or "").strip()
+        if download_running():
+            return {
+                "ok": True,
+                "started": False,
+                "already_running": True,
+                "download": download_progress(),
+                "catalog": enrich_models(),
+            }
         cmd = ["/usr/local/bin/stickllm-download-model", "--i-understand"]
         if mid:
             cmd += ["--id", mid]
-        r = sh(cmd, timeout=7200)
-        r["catalog"] = enrich_models()
-        return r
+        # Background so the UI can poll download progress.
+        log = RUN / "download.log"
+        RUN.mkdir(parents=True, exist_ok=True)
+        with open(log, "ab") as lf:
+            subprocess.Popen(
+                cmd,
+                stdout=lf,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        return {
+            "ok": True,
+            "started": True,
+            "id": mid,
+            "download": download_progress(),
+            "catalog": enrich_models(),
+        }
     if action == "model_activate":
         mid = str(params.get("id") or "").strip()
         if not mid:

@@ -1,20 +1,29 @@
 #!/bin/bash
-# Console status on tty1: full-screen phases + timer → READY with model/USB/SSH hints.
-set -euo pipefail
+# Console status on tty1: live phases + timer → READY with pair code (all boot modes).
+# Owns tty1 (conflicts getty@tty1). Term login: Ctrl+Alt+F2 or SSH.
+# NOTE: avoid set -e — a single failed curl/systemctl must not kill the status UI.
+set -uo pipefail
 
 TTY="${STICKLLM_TTY:-/dev/tty1}"
+# Probe loopback services; LAN clients use HTTPS gateway when TLS is on.
 API="${STICKLLM_API:-http://127.0.0.1:8080}"
 UI="${STICKLLM_UI:-http://127.0.0.1/}"
+UI_TLS="${STICKLLM_UI_TLS:-https://127.0.0.1/}"
 RUN="${STICKLLM_RUN:-/run/stickllm}"
 MODEL_PATH="/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
 MODEL_NAME="Qwen2.5-7B Instruct Q5_K_M (baked)"
+LOG="$RUN/bootstatus.log"
 
 mkdir -p "$RUN"
+touch "$LOG"
+# Immediate breadcrumb even if later logic breaks (visible in journal + tty).
+echo "bootstatus: starting pid=$$" | tee -a "$LOG" >>"$TTY" 2>/dev/null || true
 
-# Prefer writing the real console; also keep a log for SSH debugging.
-exec >>"$TTY" 2>&1
-
-clear_tty() { printf '\033c' || true; }
+clear_tty() {
+  # Full reset — kills leftover kernel/getty scrollback on this tty.
+  local seq=$'\033c\033[H\033[2J\033[3J'
+  printf '%s' "$seq" >"$TTY" 2>/dev/null || true
+}
 
 mode="lan"
 mode_label="LAN Server (phone/browser chat)"
@@ -24,26 +33,37 @@ grep -qw 'stickllm.local' /proc/cmdline 2>/dev/null && {
 }
 grep -qw 'stickllm.ssh' /proc/cmdline 2>/dev/null && {
   mode="ssh"
-  mode_label="Term (console login + SSH)"
+  mode_label="Term (SSH + tty2 login)"
+}
+
+PAIR_STATE="none" # none | code | paired
+
+ensure_pair() {
+  PAIR_CODE=""
+  PAIR_STATE="none"
+  # Never mint a new code once a browser has paired — that used to wipe the session
+  # every READY redraw (pair-code.txt is deleted on successful pair).
+  if [[ -f "$RUN/auth.json" ]] && python3 -c 'import json,sys;d=json.load(open("'"$RUN"'/auth.json"));sys.exit(0 if d.get("paired") else 1)' 2>/dev/null; then
+    PAIR_STATE="paired"
+    return
+  fi
+  if [[ ! -s "$RUN/pair-code.txt" ]] || [[ ! -f "$RUN/auth.json" ]]; then
+    /usr/local/bin/stickllm-pair >/dev/null 2>&1 || true
+  fi
+  PAIR_CODE="$(tr -d '[:space:]' <"$RUN/pair-code.txt" 2>/dev/null || true)"
+  if [[ -n "${PAIR_CODE:-}" ]]; then
+    PAIR_STATE="code"
+  fi
+}
+
+say() {
+  printf '%s\n' "$*" | tee -a "$LOG" >>"$TTY" 2>/dev/null || printf '%s\n' "$*"
 }
 
 detect_phase() {
   local ui_ok="$1" api_ok="$2"
-  local usb_note="checking USB…"
-  if [[ -f "$RUN/storage.json" ]]; then
-    usb_note="$(python3 -c 'import json;d=json.load(open("'"$RUN"'/storage.json"));print("USB DATA mounted ("+str(d.get("free_gb","?"))+" GiB free)" if d.get("mounted") else "USB DATA: "+str(d.get("note","not claimed")))' 2>/dev/null || echo "USB DATA: status unread")"
-  else
-    usb_state="$(systemctl show -p ActiveState --value stickllm-usb.service 2>/dev/null || echo unknown)"
-    case "$usb_state" in
-      activating) usb_note="Claiming USB free space as STICKLLM-DATA…" ;;
-      active|inactive) usb_note="USB DATA: not claimed yet (run claim in Term)" ;;
-      failed) usb_note="USB claim skipped/failed (OK if no free space)" ;;
-    esac
-  fi
 
-  if [[ -f "$MODEL_PATH" ]]; then
-    :
-  else
+  if [[ ! -f "$MODEL_PATH" ]]; then
     echo "Waiting for baked model files…"
     return
   fi
@@ -63,13 +83,12 @@ detect_phase() {
     return
   fi
 
-  if [[ "$ui_ok" -eq 1 ]]; then
-    echo "Loading $MODEL_NAME into VRAM (GPU)…"
-    return
-  fi
-
   if systemctl is-active --quiet stickllm-llama.service 2>/dev/null; then
-    echo "Starting llama-server — loading $MODEL_NAME into VRAM…"
+    if [[ "$ui_ok" -eq 1 ]]; then
+      echo "Loading model into GPU VRAM (llama starting)…"
+    else
+      echo "Starting llama-server — loading model into VRAM…"
+    fi
     return
   fi
 
@@ -84,36 +103,68 @@ detect_phase() {
     return
   fi
 
-  # Surface USB note as primary if still early
-  if [[ "$usb_note" == Claiming* ]]; then
-    echo "$usb_note"
+  local usb_state
+  usb_state="$(systemctl show -p ActiveState --value stickllm-usb.service 2>/dev/null || echo unknown)"
+  if [[ "$usb_state" == "activating" ]]; then
+    echo "Claiming USB free space as STICKLLM-DATA…"
     return
   fi
 
-  echo "Starting live system… ($usb_note)"
+  echo "Starting StickLLM services…"
+}
+
+usb_line() {
+  if [[ -f "$RUN/storage.json" ]]; then
+    python3 -c 'import json;d=json.load(open("'"$RUN"'/storage.json"));print("USB DATA: mounted, "+str(d.get("free_gb","?"))+" GiB free" if d.get("mounted") else "USB DATA: "+str(d.get("note","not claimed")))' 2>/dev/null \
+      || echo "USB DATA: ?"
+  else
+    echo "USB DATA: (checking…)"
+  fi
+}
+
+draw_header() {
+  local title="$1"
+  say ""
+  say "========================================"
+  say "  ${title}"
+  say "========================================"
+  say ""
+  say "  Mode:   $mode_label"
+  say "  Model:  $MODEL_NAME"
+  say "  $(usb_line)"
+  say ""
+}
+
+draw_pair_box() {
+  ensure_pair
+  case "$PAIR_STATE" in
+    paired)
+      say "  ┌─────────────────────────┐"
+      say "  │  PAIRED — browser OK    │"
+      say "  └─────────────────────────┘"
+      say "  Chat + Models unlocked until reboot"
+      ;;
+    code)
+      say "  ┌─────────────────────────┐"
+      say "  │  PAIR CODE:  ${PAIR_CODE}     │"
+      say "  └─────────────────────────┘"
+      say "  Browser → Pair → enter code (Models menu, no sudo)"
+      ;;
+    *)
+      say "  PAIR CODE: generating…"
+      ;;
+  esac
 }
 
 draw() {
   local elapsed="$1" phase="$2" ip="$3" ui_ok="$4" api_ok="$5"
-  local usb_line="USB DATA: (pending)"
-  [[ -f "$RUN/storage.json" ]] && usb_line="$(python3 -c 'import json;d=json.load(open("'"$RUN"'/storage.json"));print("USB DATA: mounted, "+str(d.get("free_gb","?"))+" GiB free" if d.get("mounted") else "USB DATA: "+str(d.get("note","not claimed")))' 2>/dev/null || echo "USB DATA: ?")"
 
   printf '%s\n' "$phase" >"$RUN/boot-phase.txt"
   printf '%s\n' "$elapsed" >"$RUN/boot-elapsed.txt"
 
   clear_tty
-  say() { printf '%s\n' "$*"; }
-  say ""
-  say "========================================"
-  say "  StickLLM v0.2"
-  say "========================================"
-  say ""
-  say "  Mode:   $mode_label"
-  say "  Model:  $MODEL_NAME"
-  say "  $usb_line"
-  say ""
+  draw_header "StickLLM — loading"
   say "  Status: $phase"
-  say "  Timer:  ${elapsed}s  (cold GPU load often 3–6 min)"
   say ""
   if [[ -n "${ip:-}" ]]; then
     say "  LAN IP: $ip"
@@ -122,111 +173,151 @@ draw() {
   fi
   say "  UI:     $([[ "$ui_ok" -eq 1 ]] && echo up || echo starting…)"
   say "  LLM:    $([[ "$api_ok" -eq 1 ]] && echo up || echo starting…)"
-  if [[ "$mode" == "ssh" ]]; then
-    say ""
-    say "  SSH:    ssh user@${ip:-<lan-ip>}   pass: stickllm"
-    say "  Local:  login on this keyboard (user / stickllm)"
-  elif [[ "$mode" == "lan" ]]; then
-    say ""
-    if [[ -n "${ip:-}" ]]; then
-      say "  When READY, open on phone/PC:  http://${ip}/"
-    else
-      say "  When READY, open on phone/PC:  http://<lan-ip>/"
-    fi
-  fi
   say ""
-  say "  (screen refreshes every few seconds — do not reboot yet)"
+  case "$mode" in
+    ssh)
+      say "  When READY: SSH  user@${ip:-<lan-ip>}  pass stickllm"
+      say "  Keyboard login: Ctrl+Alt+F2  (user / stickllm)"
+      ;;
+    local)
+      say "  When READY: chat continues on this screen."
+      ;;
+    *)
+      if [[ -n "${ip:-}" ]]; then
+        say "  When READY: phone/PC →  http://${ip}/"
+      else
+        say "  When READY: phone/PC →  http://<lan-ip>/"
+      fi
+      ;;
+  esac
+  say ""
+  draw_pair_box
+  say ""
+  say "  Leave this screen up — it only refreshes when status changes."
   say ""
 }
 
 draw_ready() {
   local elapsed="$1" ip="$2"
-  local usb_line="USB DATA: not claimed — sudo stickllm-usb-claim --auto --yes"
-  [[ -f "$RUN/storage.json" ]] && usb_line="$(python3 -c 'import json;d=json.load(open("'"$RUN"'/storage.json"));print("USB DATA: mounted, "+str(d.get("free_gb","?"))+" GiB free" if d.get("mounted") else "USB DATA: "+str(d.get("note","not claimed"))+" — sudo stickllm-usb-claim --auto --yes")' 2>/dev/null || echo "$usb_line")"
 
   printf 'READY\n' >"$RUN/boot-phase.txt"
+  ensure_pair
   clear_tty
-  say() { printf '%s\n' "$*"; }
-  say ""
-  say "========================================"
-  say "  StickLLM READY"
-  say "========================================"
-  say ""
+  draw_header "StickLLM — READY"
   say "  Boot took: ${elapsed}s"
-  say "  Mode:      $mode_label"
-  say "  Model:     $MODEL_NAME"
-  say "  $usb_line"
   say ""
-  if [[ -n "${ip:-}" ]]; then
-    say "  Chat UI:   http://${ip}/"
-    say "  API:       http://${ip}:8080/v1/chat/completions"
-  else
-    say "  Chat UI:   http://127.0.0.1/"
-    say "  API:       http://127.0.0.1:8080/v1/chat/completions"
-    say "  (no LAN IP — check cable)"
+  # Prefer HTTPS URLs when TLS cert exists (v0.3); else HTTP (v0.2).
+  FP=""
+  SCHEME="http"
+  if [[ -f /var/lib/stickllm/tls/cert.pem ]] && command -v openssl >/dev/null 2>&1; then
+    SCHEME="https"
+    FP="$(openssl x509 -in /var/lib/stickllm/tls/cert.pem -noout -fingerprint -sha256 2>/dev/null | awk -F= '{print $2}' | tr -d ':' | cut -c1-16 || true)"
   fi
+  if [[ -n "${ip:-}" ]]; then
+    say "  Chat UI:   ${SCHEME}://${ip}/"
+    say "  API:       ${SCHEME}://${ip}/v1/chat/completions"
+    if [[ "$SCHEME" == "https" ]]; then
+      say "  Models:    ${SCHEME}://${ip}/stickllm/"
+    fi
+  else
+    say "  Chat UI:   ${SCHEME}://127.0.0.1/"
+    say "  (no LAN IP — check cable / Wi‑Fi)"
+  fi
+  if [[ "$SCHEME" == "https" ]]; then
+    if [[ -n "${FP:-}" ]]; then
+      say "  TLS:       self-signed · SHA256 ${FP}…"
+    else
+      say "  TLS:       self-signed (accept browser warning once)"
+    fi
+  fi
+  say ""
+  draw_pair_box
   say ""
   case "$mode" in
     local)
-      say "  Next: local chat starts on this screen."
+      say "  Next: local console chat starting…"
       ;;
     ssh)
-      say "  Next: log in here, or from another PC:"
-      say "        ssh user@${ip:-<lan-ip>}"
-      say "        password: stickllm"
-      say ""
-      PAIR_CODE="$(cat "$RUN/pair-code.txt" 2>/dev/null | tr -d '[:space:]' || true)"
-      if [[ -n "${PAIR_CODE:-}" ]]; then
-        say "  Browser pair code:  ${PAIR_CODE}"
-        say "  (Chat UI → Pair — Models menu, no sudo needed)"
-      fi
+      say "  SSH:   ssh user@${ip:-<lan-ip>}   password: stickllm"
+      say "  Local: Ctrl+Alt+F2 → login user / stickllm"
+      say "  (this screen stays on tty1 with the pair code)"
       ;;
     *)
-      say "  How to connect (same Wi‑Fi / LAN):"
-      if [[ -n "${ip:-}" ]]; then
-        say "    1. Phone or PC browser →  http://${ip}/"
-      else
-        say "    1. Wait for LAN IP, then open  http://<ip>/"
-      fi
-      say "    2. Enter the PAIR CODE below when the browser asks"
-      say "    3. Chat + Models menu work after pairing (no SSH)"
-      say ""
-      PAIR_CODE="$(cat "$RUN/pair-code.txt" 2>/dev/null | tr -d '[:space:]' || true)"
-      if [[ -n "${PAIR_CODE:-}" ]]; then
-        say "  ┌─────────────────────────┐"
-        say "  │  PAIR CODE:  ${PAIR_CODE}     │"
-        say "  └─────────────────────────┘"
-        say "  (one-time — only shown on this screen)"
-      else
-        say "  PAIR CODE: (already used or not ready — reboot to refresh)"
-      fi
+      say "  Connect (same LAN):"
+      say "    1. Browser → ${SCHEME}://${ip:-<lan-ip>}/"
+      [[ "$SCHEME" == "https" ]] && say "       (accept cert warning once)"
+      say "    2. Enter PAIR CODE above"
+      say "    3. Chat + Models (no SSH)"
       ;;
   esac
   say ""
-  say "  Idle — waiting for you. Models: use Chat UI after pairing."
+  say "  Idle — leave this screen up. Reboot clears the pair."
   say ""
 }
 
-deadline=$((SECONDS + 600))
+# Mint pair as early as possible so READY never races control.
+ensure_pair
+
+LAST_SIG=""
+paint_loading() {
+  local elapsed="$1" phase="$2" ip="$3" ui_ok="$4" api_ok="$5"
+  local sig="${phase}|${ip}|${ui_ok}|${api_ok}|${PAIR_STATE}|${PAIR_CODE}"
+  # Only full-screen redraw when something meaningful changes (stops flicker).
+  if [[ "$sig" != "$LAST_SIG" ]]; then
+    LAST_SIG="$sig"
+    draw "$elapsed" "$phase" "$ip" "$ui_ok" "$api_ok"
+  else
+    printf '%s\n' "$elapsed" >"$RUN/boot-elapsed.txt"
+  fi
+}
+
+# Immediate first paint (don't wait for network/GPU).
+paint_loading 0 "Starting StickLLM…" "" 0 0
+
+deadline=$((SECONDS + 900))
+ready_drawn=0
 while (( SECONDS < deadline )); do
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   ui_ok=0
   api_ok=0
-  curl -fsS --max-time 2 "$UI" >/dev/null 2>&1 && ui_ok=1
-  curl -fsS --max-time 2 "$API/health" >/dev/null 2>&1 && api_ok=1
+  # UI may be HTTP (v0.2) or HTTPS (v0.3)
+  curl -fsS --max-time 1 "$UI" >/dev/null 2>&1 && ui_ok=1
+  [[ "$ui_ok" -eq 0 ]] && curl -fkS --max-time 1 "$UI_TLS" >/dev/null 2>&1 && ui_ok=1
+  curl -fsS --max-time 1 "$API/health" >/dev/null 2>&1 && api_ok=1
+  [[ "$api_ok" -eq 0 ]] && curl -fkS --max-time 1 "https://127.0.0.1/health" >/dev/null 2>&1 && api_ok=1
 
   phase="$(detect_phase "$ui_ok" "$api_ok")"
+  ensure_pair
   if [[ "$phase" == "READY" ]]; then
     draw_ready "$SECONDS" "${ip:-}"
-    exit 0
+    ready_drawn=1
+    if [[ "$mode" == "local" ]]; then
+      # Hand tty1 to stickllm-local-chat.
+      sleep 4
+      exit 0
+    fi
+    # Stay put — only repaint if IP or pair state changes (no idle flicker).
+    ready_sig="${ip}|${PAIR_STATE}|${PAIR_CODE}"
+    while true; do
+      sleep 15
+      ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+      ensure_pair
+      sig="${ip}|${PAIR_STATE}|${PAIR_CODE}"
+      if [[ "$sig" != "$ready_sig" ]]; then
+        ready_sig="$sig"
+        draw_ready "$SECONDS" "${ip:-}"
+      fi
+    done
   fi
-  draw "$SECONDS" "$phase" "${ip:-}" "$ui_ok" "$api_ok"
+  paint_loading "$SECONDS" "$phase" "${ip:-}" "$ui_ok" "$api_ok"
   sleep 3
 done
 
 clear_tty
-printf '%s\n' ""
-printf '%s\n' "StickLLM timed out waiting for UI/LLM (${SECONDS}s)."
-printf '%s\n' "Last phase: $(cat "$RUN/boot-phase.txt" 2>/dev/null || echo unknown)"
-printf '%s\n' "Run: stickllm-status"
+say ""
+say "StickLLM timed out waiting for UI/LLM (${SECONDS}s)."
+say "Last phase: $(cat "$RUN/boot-phase.txt" 2>/dev/null || echo unknown)"
+say "Run: stickllm-status"
+ensure_pair
+draw_pair_box
 exit 1

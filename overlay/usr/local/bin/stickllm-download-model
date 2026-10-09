@@ -112,26 +112,128 @@ fi
 FILES="$(echo "$MAP" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["hf_files"]))')"
 HASHES="$(echo "$MAP" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["sha256"]))')"
 
+PROGRESS_JSON="${STICKLLM_RUN:-/run/stickllm}/download-progress.json"
+mkdir -p "$(dirname "$PROGRESS_JSON")"
+TOTAL_BYTES="$(echo "$MAP" | python3 -c 'import json,sys; print(int(float(json.load(sys.stdin).get("approx_size_gb") or 0)*(1024**3)))')"
+FILE_COUNT="$(echo "$MAP" | python3 -c 'import json,sys; print(max(len(json.load(sys.stdin).get("hf_files") or []),1))')"
+PER_FILE_BYTES=$(( TOTAL_BYTES / FILE_COUNT ))
+[[ "$PER_FILE_BYTES" -lt 1 ]] && PER_FILE_BYTES=0
+
+write_progress() {
+  local state="$1" file="$2" done_b="$3" total_b="$4" note="${5:-}"
+  python3 - "$PROGRESS_JSON" "$state" "$ID" "$NAME" "$file" "$done_b" "$total_b" "$note" <<'PY'
+import json, sys, time
+path, state, mid, name, file, done, total, note = sys.argv[1:9]
+done_i, total_i = int(done or 0), int(total or 0)
+pct = None
+if total_i > 0:
+    pct = max(0.0, min(99.9, round(100.0 * done_i / total_i, 1)))
+doc = {
+    "state": state,
+    "id": mid,
+    "name": name,
+    "file": file,
+    "percent": pct,
+    "bytes_done": done_i,
+    "bytes_total": total_i,
+    "note": note,
+    "updated": int(time.time()),
+}
+open(path, "w", encoding="utf-8").write(json.dumps(doc) + "\n")
+PY
+}
+
+write_progress "starting" "" 0 "$TOTAL_BYTES" "starting download"
+
+cleanup_progress() {
+  local st="${1:-done}"
+  write_progress "$st" "" "$TOTAL_BYTES" "$TOTAL_BYTES" "$st"
+}
+trap 'cleanup_progress failed' ERR
+
 i=0
+BYTES_BEFORE=0
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
   DEST="${DEST_DIR}/${f}"
   URL="https://huggingface.co/${REPO}/resolve/main/${f}"
   if [[ -f "$DEST" ]]; then
     echo "Already present: $DEST"
+    SZ="$(stat -c%s "$DEST" 2>/dev/null || echo 0)"
+    BYTES_BEFORE=$((BYTES_BEFORE + SZ))
+    write_progress "downloading" "$f" "$BYTES_BEFORE" "$TOTAL_BYTES" "already present"
   else
     TMP="${DEST}.partial"
     echo "Fetching $f …"
+    write_progress "downloading" "$f" "$BYTES_BEFORE" "$TOTAL_BYTES" "fetching"
     if command -v curl >/dev/null; then
-      curl -L --fail --progress-bar -o "$TMP" "$URL"
+      # Resume + retry: HF / USB sticks drop connections; don't leave a frozen .partial.
+      ATTEMPT=0
+      MAX_ATTEMPTS=30
+      while (( ATTEMPT < MAX_ATTEMPTS )); do
+        ATTEMPT=$((ATTEMPT + 1))
+        write_progress "downloading" "$f" "$BYTES_BEFORE" "$TOTAL_BYTES" "fetching (try ${ATTEMPT}/${MAX_ATTEMPTS})"
+        set +e
+        curl -L --fail --progress-bar \
+          -C - \
+          --retry 8 \
+          --retry-delay 3 \
+          --retry-all-errors \
+          --connect-timeout 30 \
+          --speed-time 60 \
+          --speed-limit 1000 \
+          -o "$TMP" "$URL" &
+        CURLPID=$!
+        STALL_TICKS=0
+        LAST_SZ=-1
+        while kill -0 "$CURLPID" 2>/dev/null; do
+          CUR="$(stat -c%s "$TMP" 2>/dev/null || echo 0)"
+          write_progress "downloading" "$f" "$((BYTES_BEFORE + CUR))" "$TOTAL_BYTES" "fetching (try ${ATTEMPT}/${MAX_ATTEMPTS})"
+          if [[ "$CUR" -eq "$LAST_SZ" ]]; then
+            STALL_TICKS=$((STALL_TICKS + 1))
+          else
+            STALL_TICKS=0
+            LAST_SZ=$CUR
+          fi
+          # If curl is alive but bytes frozen ~3 min, kill and resume.
+          if (( STALL_TICKS >= 36 )); then
+            echo "Stall detected on $f — restarting curl (try ${ATTEMPT})"
+            kill "$CURLPID" 2>/dev/null || true
+            wait "$CURLPID" 2>/dev/null || true
+            break
+          fi
+          sleep 5
+        done
+        wait "$CURLPID" 2>/dev/null
+        CURL_RC=$?
+        set -e
+        # Finished successfully if no .partial left... we still have TMP until mv
+        if [[ "$CURL_RC" -eq 0 ]] && [[ -f "$TMP" ]]; then
+          break
+        fi
+        echo "curl exit ${CURL_RC} for $f — will resume (try ${ATTEMPT}/${MAX_ATTEMPTS})"
+        sleep 5
+      done
+      if [[ ! -f "$TMP" ]]; then
+        write_progress "failed" "$f" "$BYTES_BEFORE" "$TOTAL_BYTES" "curl failed"
+        exit 1
+      fi
+      # Heuristic: if we know total and file is far too small, keep retrying once more outer...
+      CUR="$(stat -c%s "$TMP" 2>/dev/null || echo 0)"
+      if [[ "$PER_FILE_BYTES" -gt 0 ]] && [[ "$CUR" -lt $((PER_FILE_BYTES * 95 / 100)) ]] && [[ "$CURL_RC" -ne 0 ]]; then
+        write_progress "failed" "$f" "$((BYTES_BEFORE + CUR))" "$TOTAL_BYTES" "incomplete after retries"
+        exit 1
+      fi
     elif command -v wget >/dev/null; then
-      wget -O "$TMP" "$URL"
+      wget -c -O "$TMP" "$URL"
     else
       echo "Need curl or wget."
       exit 1
     fi
     mv "$TMP" "$DEST"
     chmod 644 "$DEST"
+    SZ="$(stat -c%s "$DEST" 2>/dev/null || echo 0)"
+    BYTES_BEFORE=$((BYTES_BEFORE + SZ))
   fi
   # Verify hash if catalog has one for this index
   expect="$(echo "$HASHES" | sed -n "$((i+1))p" | tr '[:upper:]' '[:lower:]')"
@@ -160,7 +262,12 @@ if [[ -n "$FIRST" ]]; then
   echo "Active model → ${DEST_DIR}/${FIRST}"
 fi
 
+write_progress "verifying" "" "$BYTES_BEFORE" "$TOTAL_BYTES" "hash check done"
 systemctl daemon-reload || true
 systemctl restart stickllm-llama.service || true
+write_progress "done" "" "$TOTAL_BYTES" "$TOTAL_BYTES" "complete"
 echo "Downloaded and verified. llama-server restart requested."
 stickllm-status || true
+# Leave done state briefly for UI, then idle
+sleep 2
+write_progress "idle" "" 0 0 ""

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# After Open WebUI starts: create the first admin once so browsers only use StickLLM pair.
+set -euo pipefail
+
+BASE="${STICKLLM_OPENWEBUI_URL:-http://127.0.0.1:8081}"
+MARK=/var/lib/stickllm/open-webui/.stickllm-bootstrapped
+mkdir -p "$(dirname "$MARK")"
+
+for _ in $(seq 1 60); do
+  if curl -fsS "$BASE/api/config" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+if [[ -f "$MARK" ]]; then
+  exit 0
+fi
+
+# If already past onboarding, just mark done.
+if curl -fsS "$BASE/api/config" 2>/dev/null | grep -q '"onboarding":false'; then
+  touch "$MARK"
+  exit 0
+fi
+
+PASS="${STICKLLM_OPENWEBUI_BOOTSTRAP_PASS:-$(openssl rand -hex 16 2>/dev/null || echo stickllm-owui)}"
+BODY=$(printf '{"name":"StickLLM","email":"admin@stickllm.local","password":"%s"}' "$PASS")
+code=$(curl -sS -o /tmp/stickllm-owui-bootstrap.json -w '%{http_code}' \
+  -X POST "$BASE/api/v1/auths/signup" \
+  -H 'Content-Type: application/json' \
+  -d "$BODY" || true)
+
+if [[ "$code" == "200" || "$code" == "201" ]]; then
+  printf '%s\n' "$PASS" >/run/stickllm/openwebui-bootstrap.pass
+  chmod 600 /run/stickllm/openwebui-bootstrap.pass 2>/dev/null || true
+  touch "$MARK"
+  echo "stickllm-openwebui-bootstrap: admin created (admin@stickllm.local)" >&2
+  exit 0
+fi
+
+# Already exists / auth disabled path
+if grep -qiE 'exist|taken|registered|disabled' /tmp/stickllm-owui-bootstrap.json 2>/dev/null; then
+  touch "$MARK"
+  exit 0
+fi
+
+echo "stickllm-openwebui-bootstrap: signup HTTP $code — $(head -c 200 /tmp/stickllm-owui-bootstrap.json 2>/dev/null)" >&2
+exit 0

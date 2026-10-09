@@ -3,7 +3,7 @@
 
 id = "amd-rtx3090"
 name = "AMD desktop + NVIDIA RTX 3090 (24 GB)"
-version = "0.1.0"
+version = "0.3.0"
 
 [host]
 cpu_vendor = "amd"
@@ -22,7 +22,7 @@ cuda_arch = "sm_86"  # Ampere
 [inference]
 engine = "llama.cpp"
 binary = "/opt/stickllm/bin/llama-server"
-host = "0.0.0.0"
+host = "127.0.0.1"  # LAN goes through TLS gateway
 port = 8080
 ctx_size = 8192
 n_gpu_layers = -1  # offload all layers to GPU
@@ -42,8 +42,10 @@ sha256 = ""  # filled by download-model.sh after first fetch
 
 [ui]
 bind = "0.0.0.0"
-port = 80
+port = 443
+http_redirect_port = 80
 path = "/opt/stickllm/ui"
+chat_frontend = "auto"  # auto | openwebui | native
 
 [privacy]
 default_mode = "ephemeral"
@@ -54,5 +56,5 @@ telemetry = false
 
 [network]
 lan_api = true
-tls = false  # v0.1: HTTP on trusted LAN only
+tls = true  # v0.3: self-signed HTTPS on :443 (HTTP :80 redirects)
 outbound_required = false
