@@ -8,16 +8,54 @@ to the USB or internal disks unless you explicitly approve a write.
 
 | | |
 |---|---|
-| Repo | [github.com/nink/stickllm](https://github.com/nink/stickllm) |
-| Version | v0.2 |
+| Repo | [github.com/StickLLM/stickllm](https://github.com/StickLLM/stickllm) |
+| Version | **v0.2** (shipping) · **v0.3** in progress |
 | Profile | **AMD desktop CPU · 32 GB RAM · NVIDIA RTX 3090 (24 GB)** only |
+| Release | [v0.2.0](https://github.com/StickLLM/stickllm/releases/tag/v0.2.0) |
+| X / Twitter | [@stickllm](https://x.com/stickllm) |
+| Web | [stickllm.org](https://stickllm.org) |
+
+## Shipping baseline (Samsung / Drive v0.2)
+
+| | |
+|---|---|
+| **Golden USB** | Samsung Type-C stick — known-good runtime; **do not wipe** |
+| **Golden ISO** | Google Drive `stickllm-amd-rtx3090-v0.2.hybrid.iso` |
+| **SHA-256** | `4914087d502d13327dbbd9196c9a4a7df46ee079d423ff4b0bc6280e1c7b1a48` |
+| **Source tag** | [`v0.2.0`](https://github.com/StickLLM/stickllm/releases/tag/v0.2.0) (`c63fadc`) — product code base for future work |
+| **Not the base** | Dirty / experimental **v0.3** trees (e.g. branch `wip/v0.3-broken`) — park there; do not treat as shipping |
+
+Local file `out/stickllm-amd-rtx3090.hybrid.iso` must match the Drive hash above before flashing.
+
+## Download v0.2 ISO (verify this hash)
+
+ISO is on **Google Drive** (GitHub asset limit is 2 GB):  
+https://drive.google.com/drive/folders/1sTgvoyQi3aU-sauolWd35bKTLGynNEd-?usp=sharing  
+
+File: `stickllm-amd-rtx3090-v0.2.hybrid.iso`
+
+**SHA-256** (canonical copy in [`checksums/v0.2.sha256`](checksums/v0.2.sha256)):
+
+```
+4914087d502d13327dbbd9196c9a4a7df46ee079d423ff4b0bc6280e1c7b1a48
+```
+
+```powershell
+(Get-FileHash .\stickllm-amd-rtx3090-v0.2.hybrid.iso -Algorithm SHA256).Hash
+```
+
+```bash
+sha256sum stickllm-amd-rtx3090-v0.2.hybrid.iso
+```
+
+If the digest does not match, do not flash — re-download or ask in the release thread.
 
 ## Threat model (summary)
 
 - Default session is **ephemeral** (RAM overlay; reboot clears chats/config).
-- Inference is **local**; UI/API are **LAN HTTP** (no TLS/auth in v0.1) — no cloud API.
+- Inference is **local**; UI/API are **LAN HTTP + pair code** in v0.2 (TLS in v0.3) — no cloud API.
 - **Persist config** and **Download model** require explicit confirmation.
-- Local ≠ safe against LAN sniffers, GPU/firmware vendors, phones, or physical access.
+- Local ≠ safe against LAN sniffers (v0.2), GPU/firmware vendors, phones, or physical access.
 - **Journalists / gov / high-risk:** read limitations + **model trust** (closed & abliterated weights) in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
 
 ## Folder layout
@@ -26,7 +64,7 @@ to the USB or internal disks unless you explicitly approve a write.
 stickllm/
 ├── config/profiles/amd-rtx3090.toml   # sole supported host profile
 ├── docs/                              # flash, boot, hardware, threat model
-├── ui/                                # static chat web UI (served on :80)
+├── ui/                                # StickLLM chat UI (v0.2: HTTP :80)
 ├── overlay/                           # files copied into the live rootfs
 ├── live-build/                        # Debian live-build hooks & package lists
 ├── scripts/                           # build, model fetch, flash helpers
@@ -42,8 +80,8 @@ stickllm/
 | Reproducible host | **Docker** (preferred) or **WSL2 Ubuntu** |
 | GPU | Proprietary **NVIDIA** driver (CUDA path for 3090) |
 | Inference | **llama.cpp** `llama-server` (OpenAI-compatible HTTP) |
-| Model | **Base stick:** small/lite GGUF (target **16 GB** USB). **Upgrade:** VRAM + free-space probe → Hugging Face allow-list download (optimum highlighted; 30s auto). Hashes on USB. v0.1 still ships Qwen2.5-7B Q5. Optional web search (DuckDuckGo) via gateway |
-| UI | Chat page on :80 → gateway (web lookup) → llama :8080 |
+| Model | **Bake:** Qwen2.5-VL-3B + mmproj (GPU) and Qwen2.5-3B (CPU). **Preferred:** Qwen3.8-27B + mmproj when VRAM ≥ 20 GB (download). 7B is download-only. Probe highlights optimum; hashes on USB. Optional web search (DuckDuckGo) via gateway |
+| UI | Native StickLLM UI via gateway (pair on LAN). v0.3: TLS + vision + multi-NVIDIA + local browser |
 | Persistence | Off by default; explicit tools only |
 
 ```bash
@@ -66,35 +104,33 @@ Boot menu:
 
 | Entry | What you get |
 |---|---|
-| **1 StickLLM Server** | Console: Loading LLM… → READY with Chat UI + API URLs (phone/LAN). |
-| **2 StickLLM Local** | Same + chat on this screen/keyboard. |
-| **3 StickLLM Term** | Console login or `ssh user@<ip>` (password `stickllm`) — `nvidia-smi`, etc. |
-| **4 StickLLM Failsafe** | No NVIDIA — recover from GPU/black-screen hangs (Term/SSH only). |
+| **1 StickLLM Server** | Console READY + pair code; phone/LAN browser chat (HTTPS). |
+| **2 StickLLM Local (browser)** | Same-box UI (cage + cog/Chromium) — **no pair** on loopback. |
+| **3 StickLLM Term** | Console login or `ssh user@<ip>` (password `stickllm`). |
+| **4 StickLLM Failsafe** | No NVIDIA — recover from GPU/black-screen hangs. |
 
 | Endpoint | Purpose |
 |---|---|
-| `http://<lan-ip>/` | Chat UI (phone-friendly) |
-| `http://127.0.0.1/` | Same UI on the stick itself |
-| `http://<lan-ip>:8080/v1/*` | OpenAI-compatible API (llama.cpp) |
+| `https://<lan-ip>/` | Chat UI (pair code required on LAN) |
+| `https://127.0.0.1/` | Local browser (trusted, no pair) |
+| `https://<lan-ip>/v1/*` | OpenAI-compatible API (Bearer after `/api/pair`) |
 
 Helpers on PATH: `stickllm-status`, `stickllm-persist`, `stickllm-download-model`, `stickllm-local-chat`.
 
-## v0.2 on the stick
+## v0.2 / v0.3 on the stick
 
-- **Pair code** on the stick screen → unlocks browser chat + Models menu (no SSH/sudo)  
-- Models menu: claim USB DATA, probe VRAM, download pinned catalog entries  
-- Catalog + SHA-256 for pinned Qwen2.5-7B; larger Qwen3.x entries awaiting pins  
-- Optional **vault** stub; SSD cache later  
-- Pairing is session/token over LAN HTTP (TLS hardening next)
+- **Native StickLLM UI only** (Open WebUI removed from the product path)  
+- **Pair code** on console for LAN; same-box loopback trusted (`STICKLLM_LOCAL_TRUST`)  
+- Models menu: USB DATA, probe, download, last-model restore  
+- Catalog + SHA-256: VL-3B+mmproj, 27B+mmproj, 7B, 3B  
 
-## Later (v0.3+)
+## v0.3
 
-- **Multi-GPU** — use more than one large NVIDIA card (v0.2 defaults to one ≥16 GB GPU)  
-- **AMD** (ROCm) and **Intel** GPU profiles  
-- **Secure paired client** (iOS / Android) · **Tor / onion** (not a bundled commercial VPN) · mesh  
-- Pin Qwen3.5 lite + Qwen3.8-27B+vision hashes · SSD cache · vault crypto  
-- Secure Boot  
-- Broader NVIDIA feedback on v0.2: 3090 / 4090 / 5090 class (best-effort beyond the ROMED8 3090 profile)
+- **TLS** — self-signed HTTPS on :443; HTTP :80 redirects  
+- **Vision** — mmproj models + image paste in native UI  
+- **Local browser** — boot menu **2**: cage + cog (or Chromium) → gateway; no pair on this box  
+- **Multi-NVIDIA** — `STICKLLM_MULTI_GPU=auto` uses all ≥16 GB cards with tensor split  
+- Next: AMD/Intel profiles
 
 ## License
 
