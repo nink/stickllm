@@ -253,13 +253,48 @@ while IFS= read -r f; do
   i=$((i+1))
 done <<<"$FILES"
 
-# Point runtime at first file / shard
-FIRST="$(echo "$FILES" | head -1)"
-if [[ -n "$FIRST" ]]; then
+# Point runtime at first non-mmproj weights; optional mmproj alongside
+MAIN=""
+MMPROJ=""
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  low="$(echo "$f" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$low" == *mmproj* ]]; then
+    [[ -z "$MMPROJ" ]] && MMPROJ="$f"
+  else
+    [[ -z "$MAIN" ]] && MAIN="$f"
+  fi
+done <<<"$FILES"
+if [[ -n "$MAIN" ]]; then
   mkdir -p /run/stickllm
-  printf 'STICKLLM_MODEL=%s\n' "${DEST_DIR}/${FIRST}" >/run/stickllm/model.env
-  ln -sfn "${DEST_DIR}/${FIRST}" /run/stickllm/current.gguf 2>/dev/null || true
-  echo "Active model → ${DEST_DIR}/${FIRST}"
+  VRAM_GB=0
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    VRAM_MB="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | awk 'BEGIN{m=0}{if($1+0>m)m=$1+0} END{print m+0}')"
+    VRAM_GB=$(( (VRAM_MB + 512) / 1024 ))
+  fi
+  N_GPU=999
+  [[ "$VRAM_GB" -lt 1 ]] && N_GPU=0 && MMPROJ=""
+  {
+    # %q so bash can source names with spaces (e.g. "Qwen2.5-7B Instruct …")
+    printf 'STICKLLM_MODEL=%q\n' "${DEST_DIR}/${MAIN}"
+    printf 'STICKLLM_MMPROJ=%q\n' "${MMPROJ:+${DEST_DIR}/${MMPROJ}}"
+    printf 'STICKLLM_N_GPU_LAYERS=%s\n' "$N_GPU"
+    printf 'STICKLLM_MODEL_ID=%q\n' "$ID"
+    printf 'STICKLLM_MODEL_NAME=%q\n' "$NAME"
+  } >/run/stickllm/model.env
+  ln -sfn "${DEST_DIR}/${MAIN}" /run/stickllm/current.gguf 2>/dev/null || true
+  # Persist choice on USB DATA so reboot restores this model when VRAM still fits
+  if findmnt -n "$MNT" >/dev/null 2>&1; then
+    mkdir -p "$MNT/etc/stickllm"
+    python3 - "$MNT/etc/stickllm/last-model.json" "$ID" "$NAME" <<'PY'
+import json, sys, time
+path, mid, name = sys.argv[1], sys.argv[2], sys.argv[3]
+open(path, "w", encoding="utf-8").write(
+    json.dumps({"id": mid, "name": name or mid, "updated": int(time.time())}, indent=2) + "\n"
+)
+PY
+  fi
+  echo "Active model → ${DEST_DIR}/${MAIN}${MMPROJ:+ (+ mmproj)}"
 fi
 
 write_progress "verifying" "" "$BYTES_BEFORE" "$TOTAL_BYTES" "hash check done"

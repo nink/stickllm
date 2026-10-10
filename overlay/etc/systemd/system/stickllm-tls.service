@@ -1,7 +1,6 @@
 [Unit]
 Description=StickLLM LAN TLS certificate bootstrap
-After=network-online.target stickllm-usb.service
-Wants=network-online.target
+After=network.target stickllm-usb.service
 Before=stickllm-ui.service
 
 [Service]

@@ -29,23 +29,27 @@ n_gpu_layers = -1  # offload all layers to GPU
 threads = 8
 
 [model]
-# Fits comfortably in 24 GB VRAM with headroom for 8k context.
-# Upstream ships Q5_K_M as two GGUF shards; service points at shard 1.
-filename = "Qwen2.5-7B-Instruct-Q5_K_M.gguf"
-hf_repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
+# Baked lite default: Qwen2.5-VL-3B + mmproj. Preferred on 24 GB: Qwen3.8-27B + mmproj (catalog download).
+# Runtime selection: stickllm-select-model + config/models/catalog.toml
+filename = "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+hf_repo = "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF"
 hf_files = [
-  "qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf",
-  "qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf",
+  "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
+  "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
 ]
-approx_size_gb = 5.4
-sha256 = ""  # filled by download-model.sh after first fetch
+approx_size_gb = 2.8
+preferred_id = "qwen38-27b-q4km"
+sha256 = [
+  "d02fe9b69ad8cadbbd228e387667af66612c44bed29ffc8eb1e7caf9ac486c12",
+  "980c9b2f78c04e6cff93d277ada09e768394f112d75db3b4e9dea8a69f9fb904",
+]
 
 [ui]
 bind = "0.0.0.0"
 port = 443
 http_redirect_port = 80
 path = "/opt/stickllm/ui"
-chat_frontend = "auto"  # auto | openwebui | native
+chat_frontend = "native"
 
 [privacy]
 default_mode = "ephemeral"

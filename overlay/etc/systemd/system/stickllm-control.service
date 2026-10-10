@@ -1,8 +1,8 @@
 [Unit]
 Description=StickLLM privileged control API (localhost)
 After=local-fs.target stickllm-console-setup.service
-# Do not block bootstatus — tty1 progress must paint even if control is slow.
-Before=stickllm-ui.service
+# v0.2: mint pair code before bootstatus paints tty1.
+Before=stickllm-ui.service stickllm-bootstatus.service
 
 [Service]
 Type=simple

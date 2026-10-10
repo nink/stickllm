@@ -1,15 +1,19 @@
 [Unit]
 Description=StickLLM console boot status (owns tty1)
 DefaultDependencies=no
-After=local-fs.target stickllm-console-setup.service
-Wants=stickllm-console-setup.service
-# Paint ASAP — do not wait for control/nvidia/llama.
-Before=getty@tty1.service
+# Drive v0.2.0 ordered After=network-online + console-setup. That only works when
+# NetworkManager-wait-online is MASKED (baked in ISO patch) so network-online is
+# immediate — otherwise Term hangs on NetworkManager and never paints the pair code.
+# Also After=control so pair mint is ready; never wait on llama/usb/nvidia.
+After=local-fs.target network-online.target stickllm-console-setup.service stickllm-control.service
+Wants=network-online.target stickllm-console-setup.service stickllm-control.service
+Before=getty@tty1.service stickllm-local.service
 Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
 ExecStartPre=/usr/bin/mkdir -p /run/stickllm
+ExecStartPre=-/bin/bash -c 'plymouth quit --wait 2>/dev/null; true'
 ExecStartPre=-/bin/bash -c 'printf "\\033c" > /dev/tty1'
 ExecStart=/usr/local/bin/stickllm-bootstatus
 Restart=on-failure

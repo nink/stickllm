@@ -4,9 +4,11 @@
 version = 1
 family = "qwen"
 
+# Baked on lite ISO: small vision (GPU) + small text (CPU). 27B+mmproj is preferred when present.
 base_image = "lite"
-base_model_id = "qwen25-7b-q5km"
-base_model_target_id = "qwen25-3b-q4km"
+base_model_id = "qwen25-vl-3b-q4km"
+base_model_cpu_id = "qwen25-3b-q4km"
+base_model_target_id = "qwen38-27b-q4km"
 optional_fat_default_id = "qwen38-27b-q4km"
 family_policy = "qwen_only"
 vision_requires_min_vram_gb = 6
@@ -33,43 +35,68 @@ id = "vram_8gb"
 label = "8 GB VRAM"
 min_vram_gb = 8
 series = "qwen2.5"
-entries = ["qwen25-7b-q5km", "qwen25-3b-q4km"]
+entries = ["qwen25-vl-3b-q4km", "qwen25-7b-q5km", "qwen25-3b-q4km"]
 
 [[tier]]
 id = "vram_12gb"
 label = "12 GB VRAM"
 min_vram_gb = 12
 series = "qwen2.5"
-entries = ["qwen25-7b-q5km"]
+entries = ["qwen25-vl-3b-q4km", "qwen25-7b-q5km"]
 
 [[tier]]
 id = "vram_16gb"
 label = "16 GB VRAM"
 min_vram_gb = 16
 series = "qwen3.8"
-entries = ["qwen38-27b-q4km"]
+entries = ["qwen38-27b-q4km", "qwen25-vl-3b-q4km"]
 
 [[tier]]
 id = "vram_24gb"
 label = "24 GB VRAM (RTX 3090 class)"
 min_vram_gb = 24
 series = "qwen3.8"
-entries = ["qwen38-27b-q4km", "qwen25-7b-q5km"]
+entries = ["qwen38-27b-q4km", "qwen25-vl-3b-q4km", "qwen25-7b-q5km"]
 
-# --- pinned (downloadable) ---
+# --- pinned (downloadable / baked) ---
 
 [[model]]
 id = "qwen38-27b-q4km"
-name = "Qwen3.8-27B Q4_K_M"
+name = "Qwen3.8-27B Q4_K_M + vision"
 tier = "vram_24gb"
 quality_rank = 100
-approx_size_gb = 16.3
+approx_size_gb = 18.3
 min_vram_gb = 20
 hf_repo = "bartowski/Qwen3.8-27B-GGUF"
-hf_files = ["Qwen3.8-27B-Q4_K_M.gguf"]
-sha256 = ["880a52af8317974f7b4b064a6bc29ff49e188b91aa218e08eea3078b6b1cc673"]
-vision = false
-notes = "Optimum text model for 24 GB; ~17.4 GB download"
+hf_files = [
+  "Qwen3.8-27B-Q4_K_M.gguf",
+  "mmproj-Qwen3.8-27B-f16.gguf",
+]
+sha256 = [
+  "880a52af8317974f7b4b064a6bc29ff49e188b91aa218e08eea3078b6b1cc673",
+  "cb0a71fe9b84af2552fc6260acf8e9773a29d115c683aba01c72a7ac537b212b",
+]
+vision = true
+notes = "Preferred default when VRAM ≥ 20 GB; ~17.4 GB weights + ~0.9 GB mmproj"
+
+[[model]]
+id = "qwen25-vl-3b-q4km"
+name = "Qwen2.5-VL-3B Instruct Q4_K_M"
+tier = "vram_8gb"
+quality_rank = 55
+approx_size_gb = 2.8
+min_vram_gb = 6
+hf_repo = "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF"
+hf_files = [
+  "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
+  "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
+]
+sha256 = [
+  "d02fe9b69ad8cadbbd228e387667af66612c44bed29ffc8eb1e7caf9ac486c12",
+  "980c9b2f78c04e6cff93d277ada09e768394f112d75db3b4e9dea8a69f9fb904",
+]
+vision = true
+notes = "Baked small vision default when 27B not installed or VRAM < 20 GB"
 
 [[model]]
 id = "qwen25-7b-q5km"
@@ -88,7 +115,7 @@ sha256 = [
   "beba9d4f2f5a1fe7d144dcae332e68b52c26705c5310dece2e5d1997e091e134",
 ]
 vision = false
-notes = "Baked on current ISO; also re-downloadable"
+notes = "Optional download (text-only); no longer baked into the ISO"
 
 [[model]]
 id = "qwen25-3b-q4km"
@@ -101,7 +128,7 @@ hf_repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
 hf_files = ["qwen2.5-3b-instruct-q4_k_m.gguf"]
 sha256 = ["626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d"]
 vision = false
-notes = "Lite / CPU-friendly; target base stick model"
+notes = "CPU / no-GPU failsafe; baked alongside small vision"
 
 [usb_data]
 label = "STICKLLM-DATA"

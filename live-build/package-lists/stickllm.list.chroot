@@ -22,6 +22,10 @@ jq
 iproute2
 iputils-ping
 libgomp1
+# v0.3 local WebUI kiosk (no full desktop)
+cage
+chromium
+fonts-dejavu-core
 firmware-linux
 firmware-linux-nonfree
 firmware-misc-nonfree

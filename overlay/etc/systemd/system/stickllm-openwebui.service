@@ -1,6 +1,7 @@
 [Unit]
 Description=StickLLM Open WebUI trial (localhost)
-After=network-online.target stickllm-llama.service stickllm-control.service
+# network.target — never network-online (DHCP wait blocks nothing useful for local OWUI).
+After=network.target stickllm-llama.service stickllm-control.service
 Wants=stickllm-llama.service
 # Absent install → unit fails; gateway falls back to native UI
 ConditionPathExists=/opt/stickllm/open-webui/bin/open-webui

@@ -1,0 +1,57 @@
+#!/bin/bash
+# Start llama-server with model.env + cuda.env (quoted-safe).
+set -euo pipefail
+
+export LD_LIBRARY_PATH="/opt/stickllm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+if [[ -f /run/stickllm/cuda.env ]]; then
+  # shellcheck disable=SC1091
+  set -a
+  # shellcheck source=/dev/null
+  . /run/stickllm/cuda.env
+  set +a
+fi
+if [[ -f /run/stickllm/model.env ]]; then
+  # shellcheck disable=SC1091
+  set -a
+  # shellcheck source=/dev/null
+  . /run/stickllm/model.env
+  set +a
+fi
+
+MODEL="${STICKLLM_MODEL:-/opt/stickllm/models/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf}"
+if [[ ! -f "$MODEL" && -f /opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf ]]; then
+  MODEL=/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf
+fi
+if [[ ! -f "$MODEL" && -f /opt/stickllm/models/qwen2.5-3b-instruct-q4_k_m.gguf ]]; then
+  MODEL=/opt/stickllm/models/qwen2.5-3b-instruct-q4_k_m.gguf
+fi
+if [[ ! -f "$MODEL" ]]; then
+  echo "stickllm-llama-start: no model file at $MODEL" >&2
+  exit 1
+fi
+
+LAYERS="${STICKLLM_N_GPU_LAYERS:-999}"
+ARGS=(
+  --model "$MODEL"
+  --host 127.0.0.1
+  --port 8080
+  --ctx-size 8192
+  --n-gpu-layers "$LAYERS"
+  --threads 8
+  --metrics
+)
+
+if [[ -n "${STICKLLM_MMPROJ:-}" && -f "${STICKLLM_MMPROJ}" ]]; then
+  ARGS+=(--mmproj "$STICKLLM_MMPROJ")
+fi
+# Only pass split flags when non-empty (empty env vars must not become CLI "").
+if [[ -n "${STICKLLM_TENSOR_SPLIT:-}" ]]; then
+  ARGS+=(--tensor-split "$STICKLLM_TENSOR_SPLIT")
+fi
+if [[ -n "${STICKLLM_SPLIT_MODE:-}" ]]; then
+  ARGS+=(--split-mode "$STICKLLM_SPLIT_MODE")
+fi
+
+echo "stickllm-llama-start: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-} model=$MODEL" >&2
+exec /opt/stickllm/bin/llama-server "${ARGS[@]}"

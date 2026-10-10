@@ -28,9 +28,12 @@ docker run --rm --privileged --network host \
     set -e
     cp /host-out/$(basename "$IN") /work/in.iso
     bash /stickllm/scripts/lib/docker-patch-iso-local.sh /work/in.iso /work/out.iso /stickllm
+    rm -f /host-out/$(basename "$TMP_OUT")
     cp -f /work/out.iso /host-out/$(basename "$TMP_OUT")
+    ls -lh /work/out.iso /host-out/$(basename "$TMP_OUT")
   "
 
+rm -f "$OUT"
 mv -f "$TMP_OUT" "$OUT"
 ls -lh "$OUT"
 echo "Patched (local mode): $OUT"

@@ -2,8 +2,8 @@
 Description=StickLLM OpenSSH (terminal + SSH boot menu)
 Documentation=file:///etc/motd
 ConditionKernelCommandLine=stickllm.ssh
-After=network-online.target stickllm-console-setup.service
-Wants=network-online.target stickllm-console-setup.service
+After=network.target stickllm-console-setup.service
+Wants=stickllm-console-setup.service
 
 [Service]
 Type=simple

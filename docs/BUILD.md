@@ -12,7 +12,7 @@ WSL2 Ubuntu is optional. On this workstation the preferred path is **Git Bash + 
 
 ```bash
 ./scripts/verify-host.sh
-./scripts/download-model.sh      # ~5.4 GB Q5_K_M (2 shards)
+./scripts/download-model.sh      # VL-3B + mmproj + 3B text (~4.8 GB)
 ./scripts/build-llama-server.sh  # CUDA sm_86 llama-server in nvidia/cuda container
 ./scripts/build.sh               # Debian live-build → out/stickllm-amd-rtx3090.hybrid.iso
 ```

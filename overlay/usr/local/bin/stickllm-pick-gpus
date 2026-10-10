@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pick a single large NVIDIA GPU for llama.cpp CUDA (multi-GPU is opt-in).
+# Select NVIDIA GPUs for llama.cpp. Multi-GPU is on by default when 2+ large cards.
 set -euo pipefail
 
 mkdir -p /run/stickllm
@@ -10,26 +10,60 @@ if ! command -v nvidia-smi >/dev/null 2>&1; then
   exit 0
 fi
 
+# Prefer GPUs with ≥16 GB; else any GPU. Timeout: hung nvidia-smi must not block llama forever.
 mapfile -t LARGE < <(
-  nvidia-smi --query-gpu=index,memory.total --format=csv,noheader,nounits 2>/dev/null \
+  timeout 20 nvidia-smi --query-gpu=index,memory.total --format=csv,noheader,nounits 2>/dev/null \
     | awk -F',' '{gsub(/ /,"",$1); gsub(/ /,"",$2); if ($2+0 >= 16000) print $1}'
+)
+mapfile -t ALL < <(
+  timeout 20 nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | tr -d ' '
 )
 
 ids=""
-if [[ "${STICKLLM_MULTI_GPU:-0}" == "1" && ${#LARGE[@]} -gt 1 ]]; then
-  ids="$(IFS=,; echo "${LARGE[*]}")"
-elif [[ ${#LARGE[@]} -ge 1 ]]; then
-  # Default: first big GPU only (stable on ROMED8 2×3090 + odd third card)
-  ids="${LARGE[0]}"
-else
-  ids="$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | tr -d ' ' | head -1)"
+# Default single-GPU (v0.2-stable). Set STICKLLM_MULTI_GPU=auto for tensor-split.
+MULTI="${STICKLLM_MULTI_GPU:-0}"
+
+if [[ "$MULTI" == "0" || "$MULTI" == "false" || "$MULTI" == "off" ]]; then
+  # Explicit single-GPU
+  if [[ ${#LARGE[@]} -ge 1 ]]; then
+    ids="${LARGE[0]}"
+  elif [[ ${#ALL[@]} -ge 1 ]]; then
+    ids="${ALL[0]}"
+  fi
+elif [[ "$MULTI" == "1" || "$MULTI" == "true" || "$MULTI" == "on" || "$MULTI" == "auto" ]]; then
+  if [[ ${#LARGE[@]} -gt 1 ]]; then
+    ids="$(IFS=,; echo "${LARGE[*]}")"
+  elif [[ ${#LARGE[@]} -eq 1 ]]; then
+    ids="${LARGE[0]}"
+  elif [[ ${#ALL[@]} -gt 1 && ( "$MULTI" == "1" || "$MULTI" == "true" || "$MULTI" == "on" ) ]]; then
+    ids="$(IFS=,; echo "${ALL[*]}")"
+  elif [[ ${#ALL[@]} -ge 1 ]]; then
+    ids="${ALL[0]}"
+  fi
 fi
 
-if [[ -n "${ids}" ]]; then
-  printf 'CUDA_VISIBLE_DEVICES=%s\n' "$ids" >"$OUT"
-else
-  echo "# no GPUs listed" >"$OUT"
-fi
+{
+  if [[ -n "$ids" ]]; then
+    printf 'CUDA_VISIBLE_DEVICES=%s\n' "$ids"
+    # Equal tensor split across N visible devices (llama.cpp --tensor-split)
+    n="$(awk -F',' '{print NF}' <<<"$ids")"
+    if [[ "$n" -gt 1 ]]; then
+      parts=()
+      for ((i = 0; i < n; i++)); do parts+=("1"); done
+      split="$(IFS=,; echo "${parts[*]}")"
+      printf 'STICKLLM_TENSOR_SPLIT=%s\n' "$split"
+      printf 'STICKLLM_SPLIT_MODE=layer\n'
+      printf 'STICKLLM_GPU_COUNT=%s\n' "$n"
+    else
+      printf 'STICKLLM_TENSOR_SPLIT=\n'
+      printf 'STICKLLM_SPLIT_MODE=\n'
+      printf 'STICKLLM_GPU_COUNT=1\n'
+    fi
+  else
+    echo "# no GPUs listed"
+    printf 'STICKLLM_GPU_COUNT=0\n'
+  fi
+} >"$OUT"
 
 chmod 644 "$OUT"
 cat "$OUT"

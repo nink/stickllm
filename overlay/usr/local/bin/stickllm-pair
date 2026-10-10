@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Create / refresh StickLLM LAN pair code (shown only on the stick console)."""
+"""Create / refresh StickLLM LAN pair code (shown only on the stick console).
+
+Default: keep an active paired session (service restarts must not wipe the browser).
+--force: clear paired state and mint a new code (revoke / re-pair).
+"""
 from __future__ import annotations
 
 import hashlib
@@ -14,29 +18,18 @@ RUN = Path(os.environ.get("STICKLLM_RUN", "/run/stickllm"))
 AUTH = RUN / "auth.json"
 
 
-def main() -> int:
-    force = "--force" in sys.argv
-    RUN.mkdir(parents=True, exist_ok=True)
-    # Service restarts must not wipe an active browser session.
-    if AUTH.is_file() and not force:
-        try:
-            old = json.loads(AUTH.read_text(encoding="utf-8"))
-            if old.get("paired") and old.get("token_hash"):
-                code_path = RUN / "pair-code.txt"
-                if code_path.is_file():
-                    print(code_path.read_text(encoding="utf-8").strip() or "PAIRED")
-                else:
-                    print("PAIRED")
-                return 0
-            if old.get("code_hash") and code_path_exists_with_code():
-                print((RUN / "pair-code.txt").read_text(encoding="utf-8").strip())
-                return 0
-        except Exception:
-            pass
+def code_path_exists_with_code() -> bool:
+    p = RUN / "pair-code.txt"
+    try:
+        return p.is_file() and bool(p.read_text(encoding="utf-8").strip())
+    except Exception:
+        return False
 
+
+def mint() -> str:
     code = f"{secrets.randbelow(1_000_000):06d}"
     token = secrets.token_urlsafe(32)
-    # Store hash of code; plaintext code only printed to stdout for bootstatus
+    # Store hash of code; plaintext code only on console via pair-code.txt / stdout.
     code_hash = hashlib.sha256(code.encode()).hexdigest()
     doc = {
         "version": 1,
@@ -55,16 +48,31 @@ def main() -> int:
     # auth.json stays 0600 (hashes / token material).
     (RUN / "pair-code.txt").write_text(code + "\n", encoding="utf-8")
     os.chmod(RUN / "pair-code.txt", 0o644)
-    print(code)
+    return code
+
+
+def main() -> int:
+    force = "--force" in sys.argv or "-f" in sys.argv
+    RUN.mkdir(parents=True, exist_ok=True)
+    # Service restarts must not wipe an active browser session.
+    if AUTH.is_file() and not force:
+        try:
+            old = json.loads(AUTH.read_text(encoding="utf-8"))
+            if old.get("paired") and old.get("token_hash"):
+                code_path = RUN / "pair-code.txt"
+                if code_path.is_file():
+                    print(code_path.read_text(encoding="utf-8").strip() or "PAIRED")
+                else:
+                    print("PAIRED")
+                return 0
+            if old.get("code_hash") and code_path_exists_with_code():
+                print((RUN / "pair-code.txt").read_text(encoding="utf-8").strip())
+                return 0
+        except Exception:
+            pass
+
+    print(mint())
     return 0
-
-
-def code_path_exists_with_code() -> bool:
-    p = RUN / "pair-code.txt"
-    try:
-        return p.is_file() and bool(p.read_text(encoding="utf-8").strip())
-    except Exception:
-        return False
 
 
 if __name__ == "__main__":

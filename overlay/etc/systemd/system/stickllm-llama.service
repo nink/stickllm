@@ -1,20 +1,18 @@
 [Unit]
 Description=StickLLM llama.cpp server (local / LAN)
-After=network-online.target nvidia-persistenced.service stickllm-nvidia.service
-Wants=network-online.target stickllm-nvidia.service
+# network.target (not network-online): StickLLM must start without DHCP wait-online.
+After=network.target nvidia-persistenced.service stickllm-nvidia.service stickllm-usb.service
+Wants=stickllm-nvidia.service stickllm-usb.service
 ConditionPathExists=/opt/stickllm/bin/llama-server
 
 [Service]
 Type=simple
 EnvironmentFile=-/etc/stickllm/runtime.env
-EnvironmentFile=-/run/stickllm/cuda.env
-EnvironmentFile=-/run/stickllm/model.env
 Environment=LD_LIBRARY_PATH=/opt/stickllm/lib
 ExecStartPre=/usr/local/bin/stickllm-nvidia-prep
 ExecStartPre=/usr/local/bin/stickllm-pick-gpus
-# model.env sets STICKLLM_MODEL after a catalog download; else baked 7B
-# Bind loopback only — LAN clients use the TLS gateway (:443), not raw :8080
-ExecStart=/bin/bash -c 'exec /opt/stickllm/bin/llama-server --model "${STICKLLM_MODEL:-/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf}" --host 127.0.0.1 --port 8080 --ctx-size 8192 --n-gpu-layers 999 --threads 8 --metrics'
+ExecStartPre=/usr/local/bin/stickllm-select-model
+ExecStart=/usr/local/bin/stickllm-llama-start
 Restart=on-failure
 RestartSec=5
 SupplementaryGroups=video render

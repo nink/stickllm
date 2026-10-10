@@ -2,14 +2,15 @@
 Description=StickLLM claim/mount USB STICKLLM-DATA
 DefaultDependencies=no
 After=local-fs.target
-Before=stickllm-llama.service stickllm-bootstatus.service
+# Do not Before=bootstatus — USB claim failures must not delay tty1 pair UI.
+Before=stickllm-llama.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/stickllm-usb-claim --auto --yes
-# Non-zero if no free space yet is OK on tiny sticks — don't block boot
-SuccessExitStatus=0 1
+# 0/1 = no free space / intentional soft fail; 32 = mount(8) on corrupt DATA
+SuccessExitStatus=0 1 32
 
 [Install]
 WantedBy=multi-user.target

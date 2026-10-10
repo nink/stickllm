@@ -12,6 +12,7 @@ chmod 755 /usr/local/bin/stickllm-status \
           /usr/local/bin/stickllm-gateway \
           /usr/local/bin/stickllm-tls \
           /usr/local/bin/stickllm-openwebui \
+          /usr/local/bin/stickllm-kiosk \
           /usr/local/bin/stickllm-nvidia-prep \
           /usr/local/bin/stickllm-pick-gpus || true
 
@@ -57,9 +58,18 @@ systemctl enable stickllm-ui.service || true
 systemctl enable stickllm-openwebui.service || true
 systemctl enable stickllm-bootstatus.service || true
 systemctl enable stickllm-local.service || true
+systemctl enable stickllm-kiosk.service || true
 systemctl enable stickllm-ssh.service || true
 systemctl enable NetworkManager.service || true
+# Do not block Server/Term splash / pair tty on DHCP / network-online timeout.
+systemctl mask NetworkManager-wait-online.service || true
+systemctl mask systemd-networkd-wait-online.service 2>/dev/null || true
+rm -f /etc/systemd/system/network-online.target.wants/NetworkManager-wait-online.service
+rm -f /etc/systemd/system/network-online.target.wants/networking.service
+rm -f /etc/systemd/system/network-online.target.wants/systemd-networkd-wait-online.service
 systemctl enable nvidia-persistenced.service || true
+# Soft-fail drop-in is in overlay; reload so SuccessExitStatus applies in image.
+systemctl daemon-reload || true
 mkdir -p /var/lib/stickllm/tls /var/lib/stickllm/open-webui
 
 # Live user convenience (live-config creates user "user")

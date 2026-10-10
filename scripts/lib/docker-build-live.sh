@@ -3,8 +3,9 @@
 # /stickllm = repo (ro), /work = Linux filesystem volume (rw) for live-build.
 set -euo pipefail
 
-MODEL_SHARD1="qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
-MODEL_SHARD2="qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf"
+MODEL_VL="Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+MODEL_VL_MMPROJ="mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf"
+MODEL_3B="qwen2.5-3b-instruct-q4_k_m.gguf"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -87,14 +88,25 @@ nvidia-kernel-dkms
 nvidia-smi
 libcuda1
 nvidia-persistenced
+cage
+chromium
+fonts-dejavu-core
 PKGS
 
 mkdir -p config/hooks/normal
 for h in /stickllm/live-build/hooks/normal/*.hook.chroot; do
+  [[ -e "$h" ]] || continue
   base="$(basename "$h")"
   tr -d '\r' < "$h" > "config/hooks/normal/$base"
   chmod +x "config/hooks/normal/$base"
 done
+# cog (WebKit) optional — Chromium remains the fallback kiosk
+cat > config/hooks/normal/0150-stickllm-cog.hook.chroot <<'HOOK'
+#!/bin/bash
+set -e
+apt-get install -y -qq cog 2>/dev/null || echo "[stickllm] cog unavailable — Chromium kiosk fallback"
+HOOK
+chmod +x config/hooks/normal/0150-stickllm-cog.hook.chroot
 
 # Overlay into includes.chroot (after lb config created the tree)
 mkdir -p config/includes.chroot
@@ -108,15 +120,21 @@ mkdir -p config/includes.chroot/opt/stickllm/ui
 rsync -a /stickllm/ui/ config/includes.chroot/opt/stickllm/ui/
 
 mkdir -p config/includes.chroot/opt/stickllm/models
-cp "/stickllm/models/${MODEL_SHARD1}" config/includes.chroot/opt/stickllm/models/
-cp "/stickllm/models/${MODEL_SHARD2}" config/includes.chroot/opt/stickllm/models/
+cp "/stickllm/models/${MODEL_VL}" config/includes.chroot/opt/stickllm/models/
+cp "/stickllm/models/${MODEL_VL_MMPROJ}" config/includes.chroot/opt/stickllm/models/
+cp "/stickllm/models/${MODEL_3B}" config/includes.chroot/opt/stickllm/models/
 
-mkdir -p config/includes.chroot/etc/stickllm
+mkdir -p config/includes.chroot/etc/stickllm/models
 cp /stickllm/config/profiles/amd-rtx3090.toml config/includes.chroot/etc/stickllm/profile.toml
+cp /stickllm/config/models/catalog.toml config/includes.chroot/etc/stickllm/models/catalog.toml
 
 test -x config/includes.chroot/opt/stickllm/bin/llama-server
 test -f config/includes.chroot/opt/stickllm/lib/libllama-server-impl.so
-test -f "config/includes.chroot/opt/stickllm/models/${MODEL_SHARD1}"
+test -f "config/includes.chroot/opt/stickllm/models/${MODEL_VL}"
+test -f "config/includes.chroot/opt/stickllm/models/${MODEL_VL_MMPROJ}"
+test -f "config/includes.chroot/opt/stickllm/models/${MODEL_3B}"
+test -f config/includes.chroot/etc/stickllm/models/catalog.toml
+test -x config/includes.chroot/usr/local/bin/stickllm-select-model
 
 mkdir -p config/bootloaders/grub-pc config/bootloaders/grub-efi
 # Prefer tracked boot/grub.cfg (LF). Fall back to inline copy if missing.

@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Fullscreen local browser on the stick (no desktop) — cage + cog (preferred) or Chromium.
+# Kernel cmdline: stickllm.kiosk or stickllm.local
+# Loopback is trusted by the gateway — no pair code on this box.
+set -uo pipefail
+
+URL="${STICKLLM_KIOSK_URL:-https://127.0.0.1/}"
+TTY="${STICKLLM_TTY:-/dev/tty1}"
+RUN="${STICKLLM_RUN:-/run/stickllm}"
+LOG="$RUN/kiosk.log"
+mkdir -p "$RUN"
+
+say() { printf '%s\n' "$*" | tee -a "$LOG" >>"$TTY" 2>/dev/null || true; }
+
+if ! command -v cage >/dev/null 2>&1; then
+  say "stickllm-kiosk: cage not installed — falling back to console status"
+  exec /usr/local/bin/stickllm-bootstatus
+fi
+
+# Prefer lightweight cog (WebKit); fall back to Chromium.
+BROWSER=""
+BROWSER_ARGS=()
+if command -v cog >/dev/null 2>&1; then
+  BROWSER="cog"
+  BROWSER_ARGS=()
+elif command -v chromium >/dev/null 2>&1; then
+  BROWSER="chromium"
+elif command -v chromium-browser >/dev/null 2>&1; then
+  BROWSER="chromium-browser"
+elif command -v google-chrome >/dev/null 2>&1; then
+  BROWSER="google-chrome"
+fi
+
+if [[ -z "$BROWSER" ]]; then
+  say "stickllm-kiosk: no browser (cog/chromium) — falling back to console status"
+  exec /usr/local/bin/stickllm-bootstatus
+fi
+
+say "StickLLM Local UI — waiting for gateway…"
+for _ in $(seq 1 180); do
+  if curl -fkS --max-time 1 "https://127.0.0.1/health" >/dev/null 2>&1 \
+     || curl -fsS --max-time 1 "http://127.0.0.1/health" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+if curl -fkS --max-time 1 "https://127.0.0.1/health" >/dev/null 2>&1; then
+  URL="${STICKLLM_KIOSK_URL:-https://127.0.0.1/}"
+else
+  URL="${STICKLLM_KIOSK_URL:-http://127.0.0.1/}"
+fi
+
+# Ephemeral profile on tmpfs — reboot clears browser state
+PROFILE="$RUN/kiosk-profile"
+mkdir -p "$PROFILE"
+chmod 700 "$PROFILE"
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+
+say "Starting local browser ($BROWSER) — same-box, no pair…"
+sleep 1
+
+if [[ "$BROWSER" == "cog" ]]; then
+  # cog: ignore TLS issues for self-signed localhost
+  exec cage -- cog \
+    --enable-developer-extras=0 \
+    "$URL"
+fi
+
+# Chromium / Chrome fallback
+exec cage -- "$BROWSER" \
+  --kiosk \
+  --ozone-platform=wayland \
+  --no-first-run \
+  --disable-infobars \
+  --disable-session-crashed-bubble \
+  --disable-features=TranslateUI \
+  --check-for-update-interval=31536000 \
+  --user-data-dir="$PROFILE" \
+  --ignore-certificate-errors \
+  --allow-insecure-localhost \
+  "$URL"

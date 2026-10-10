@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""Pick STICKLLM_MODEL / STICKLLM_MMPROJ for llama-server from catalog + VRAM.
+
+Policy:
+  1. Keep in-session /run/stickllm/model.env if still valid (paths must exist)
+  2. Else restore last model from STICKLLM-DATA (USB) if installed + VRAM fits
+  3. Else defaults: 27B+mmproj (VRAM≥20) → VL-3B (VRAM≥6) → baked 7B → 3B text
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+RUN = Path(os.environ.get("STICKLLM_RUN", "/run/stickllm"))
+CATALOG = Path(os.environ.get("STICKLLM_CATALOG", "/etc/stickllm/models/catalog.toml"))
+MNT = Path(os.environ.get("STICKLLM_DATA_MNT", "/mnt/stickllm-data"))
+BAKED = Path("/opt/stickllm/models")
+LAST_MODEL = MNT / "etc" / "stickllm" / "last-model.json"
+
+PREFERRED_GPU = "qwen38-27b-q4km"
+SMALL_VISION = "qwen25-vl-3b-q4km"
+BAKED_7B = "qwen25-7b-q5km"
+SMALL_TEXT = "qwen25-3b-q4km"
+
+
+def model_dirs() -> list[Path]:
+    dirs: list[Path] = []
+    data = MNT / "models"
+    if data.is_dir():
+        dirs.append(data)
+    if BAKED.is_dir():
+        dirs.append(BAKED)
+    return dirs
+
+
+def find_file(name: str) -> Path | None:
+    for d in model_dirs():
+        p = d / name
+        if p.is_file() and p.stat().st_size > 1_000_000:
+            return p
+    return None
+
+
+def detect_vram_gb() -> float:
+    try:
+        p = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        vals = [float(x.strip()) for x in p.stdout.splitlines() if x.strip()]
+        if not vals:
+            return 0.0
+        return max(vals) / 1024.0
+    except Exception:
+        return 0.0
+
+
+def parse_catalog() -> list[dict]:
+    if not CATALOG.is_file():
+        return []
+    text = CATALOG.read_text(encoding="utf-8")
+    out = []
+    for b in re.split(r"\n\[\[model\]\]\n", text)[1:]:
+        def g(key: str, default: str = "") -> str:
+            m = re.search(rf"^{key}\s*=\s*(.+)$", b, re.M)
+            if not m:
+                return default
+            return m.group(1).strip().strip('"')
+
+        mid = g("id")
+        if not mid:
+            continue
+        fm = re.search(r"^hf_files\s*=\s*\[(.*?)\]", b, re.M | re.S)
+        files = re.findall(r'"([^"]*)"', fm.group(1)) if fm else []
+        out.append(
+            {
+                "id": mid,
+                "name": g("name", mid),
+                "min_vram_gb": float(g("min_vram_gb", "0") or 0),
+                "quality_rank": int(float(g("quality_rank", "0") or 0)),
+                "vision": g("vision", "false").lower() == "true",
+                "hf_files": files,
+            }
+        )
+    return out
+
+
+def split_files(files: list[str]) -> tuple[str | None, str | None]:
+    main = None
+    mmproj = None
+    for f in files:
+        low = f.lower()
+        if "mmproj" in low:
+            if mmproj is None:
+                mmproj = f
+        elif main is None:
+            main = f
+    return main, mmproj
+
+
+def resolve_installed(m: dict) -> dict | None:
+    files = m.get("hf_files") or []
+    if not files:
+        return None
+    paths = [find_file(f) for f in files]
+    if not all(paths):
+        return None
+    main_name, mmproj_name = split_files(files)
+    if not main_name:
+        return None
+    main_path = find_file(main_name)
+    if not main_path:
+        return None
+    mmproj_path = find_file(mmproj_name) if mmproj_name else None
+    if m.get("vision") and not mmproj_path:
+        return None
+    return {
+        **m,
+        "path": str(main_path),
+        "mmproj": str(mmproj_path) if mmproj_path else "",
+    }
+
+
+def write_env(model: str, mmproj: str, n_gpu_layers: int, model_id: str, name: str) -> None:
+    RUN.mkdir(parents=True, exist_ok=True)
+    # Quote for bash `source` — unquoted names with spaces break llama ExecStart.
+    lines = [
+        f"STICKLLM_MODEL={shlex.quote(model)}",
+        f"STICKLLM_MMPROJ={shlex.quote(mmproj)}",
+        f"STICKLLM_N_GPU_LAYERS={int(n_gpu_layers)}",
+        f"STICKLLM_MODEL_ID={shlex.quote(model_id)}",
+        f"STICKLLM_MODEL_NAME={shlex.quote(name)}",
+    ]
+    (RUN / "model.env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        cur = RUN / "current.gguf"
+        if cur.exists() or cur.is_symlink():
+            cur.unlink()
+        cur.symlink_to(model)
+    except Exception:
+        pass
+
+
+def load_last_model_id() -> str:
+    try:
+        if not LAST_MODEL.is_file():
+            return ""
+        doc = json.loads(LAST_MODEL.read_text(encoding="utf-8"))
+        mid = (doc.get("id") or "").strip()
+        return mid
+    except Exception:
+        return ""
+
+
+def installed_that_fit(vram: float) -> dict[str, dict]:
+    by_id: dict[str, dict] = {}
+    for m in parse_catalog():
+        r = resolve_installed(m)
+        if not r:
+            continue
+        min_v = float(r["min_vram_gb"])
+        fits = vram + 0.01 >= min_v or min_v == 0
+        if r.get("vision") and vram < 0.5:
+            fits = False
+        if not fits:
+            continue
+        by_id[r["id"]] = r
+    return by_id
+
+
+def pick_default(vram: float, by_id: dict[str, dict]) -> dict | None:
+    if vram < 0.5:
+        if SMALL_TEXT in by_id:
+            return by_id[SMALL_TEXT]
+        text = [m for m in by_id.values() if not m.get("vision")]
+        if text:
+            return max(text, key=lambda m: m["quality_rank"])
+        return None
+
+    if vram >= 20 and PREFERRED_GPU in by_id:
+        return by_id[PREFERRED_GPU]
+    if vram >= 6 and SMALL_VISION in by_id:
+        return by_id[SMALL_VISION]
+    if by_id:
+        return max(by_id.values(), key=lambda m: m["quality_rank"])
+    return None
+
+
+def fallback_paths(vram: float) -> dict | None:
+    vl = BAKED / "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+    vl_mm = BAKED / "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf"
+    text = BAKED / "qwen2.5-3b-instruct-q4_k_m.gguf"
+    old7 = BAKED / "qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
+    if vram >= 6 and vl.is_file() and vl_mm.is_file():
+        return {
+            "id": SMALL_VISION,
+            "name": "Qwen2.5-VL-3B Instruct Q4_K_M",
+            "path": str(vl),
+            "mmproj": str(vl_mm),
+            "vision": True,
+        }
+    # Prefer baked 7B when VL is missing (common on older / patched sticks).
+    if old7.is_file() and (vram >= 8 or vram < 0.5 or not text.is_file()):
+        return {
+            "id": BAKED_7B,
+            "name": "Qwen2.5-7B Instruct Q5_K_M",
+            "path": str(old7),
+            "mmproj": "",
+            "vision": False,
+        }
+    if text.is_file():
+        return {
+            "id": SMALL_TEXT,
+            "name": "Qwen2.5-3B Instruct Q4_K_M",
+            "path": str(text),
+            "mmproj": "",
+            "vision": False,
+        }
+    if old7.is_file():
+        return {
+            "id": BAKED_7B,
+            "name": "Qwen2.5-7B Instruct Q5_K_M",
+            "path": str(old7),
+            "mmproj": "",
+            "vision": False,
+        }
+    return None
+
+
+def keep_run_env() -> bool:
+    env_path = RUN / "model.env"
+    if not env_path.is_file():
+        return False
+    text = env_path.read_text(encoding="utf-8")
+    if "STICKLLM_MODEL=" not in text or "STICKLLM_MODEL_ID=" not in text:
+        return False
+    vals: dict[str, str] = {}
+    for ln in text.splitlines():
+        if "=" in ln and not ln.strip().startswith("#"):
+            k, v = ln.split("=", 1)
+            vals[k.strip()] = v.strip()
+    path = vals.get("STICKLLM_MODEL", "")
+    if not path or not Path(path).is_file():
+        return False
+    mmproj = vals.get("STICKLLM_MMPROJ", "")
+    if mmproj and not Path(mmproj).is_file():
+        return False
+    return True
+
+
+def main() -> int:
+    force = "--force" in sys.argv or os.environ.get("STICKLLM_SELECT_FORCE") == "1"
+    if not force and keep_run_env():
+        print("stickllm-select-model: keep /run model.env")
+        return 0
+
+    vram = detect_vram_gb()
+    by_id = installed_that_fit(vram)
+    choice = None
+    source = "default"
+
+    last_id = load_last_model_id()
+    if last_id and last_id in by_id:
+        choice = by_id[last_id]
+        source = "last-usb"
+    if not choice:
+        choice = pick_default(vram, by_id)
+        source = "default"
+    if not choice:
+        choice = fallback_paths(vram)
+        source = "baked-fallback"
+
+    if not choice:
+        print("stickllm-select-model: no model files found", file=sys.stderr)
+        return 1
+
+    n_gpu = 0 if vram < 0.5 else 999
+    mmproj = choice.get("mmproj") or ""
+    if vram < 0.5:
+        mmproj = ""
+    write_env(choice["path"], mmproj, n_gpu, choice["id"], choice.get("name", choice["id"]))
+    print(
+        f"stickllm-select-model: {choice['id']} via {source} "
+        f"(vram={vram:.1f}G layers={n_gpu} mmproj={'yes' if mmproj else 'no'})"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

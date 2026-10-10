@@ -7,7 +7,8 @@ default_mode = "ephemeral"
 
 [inference]
 binary = "/opt/stickllm/bin/llama-server"
-model = "/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
+model = "/opt/stickllm/models/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+mmproj = "/opt/stickllm/models/mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf"
 host = "127.0.0.1"
 port = 8080
 ctx_size = 8192
@@ -18,7 +19,7 @@ threads = 8
 root = "/opt/stickllm/ui"
 port = 443
 http_redirect_port = 80
-chat_frontend = "auto"
+chat_frontend = "native"
 
 [network]
 tls = true

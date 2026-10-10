@@ -1,0 +1,27 @@
+[Unit]
+Description=StickLLM local WebUI kiosk (cage + cog/Chromium on tty1)
+ConditionKernelCommandLine=|stickllm.kiosk
+ConditionKernelCommandLine=|stickllm.local
+After=stickllm-llama.service stickllm-ui.service stickllm-tls.service stickllm-console-setup.service
+Wants=stickllm-llama.service stickllm-ui.service
+# Stop getty/CLI local chat on tty1. Do NOT Conflict bootstatus here — a failed
+# kiosk Condition or late start must never tear down the Server/Term pair screen.
+Conflicts=getty@tty1.service stickllm-local.service
+ConditionPathExists=/usr/local/bin/stickllm-kiosk
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p /run/stickllm/kiosk-profile /run/stickllm
+ExecStart=/usr/local/bin/stickllm-kiosk
+Restart=on-failure
+RestartSec=3
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+# Wayland/kiosk needs a seat; logind provides it on Debian live
+
+[Install]
+WantedBy=multi-user.target

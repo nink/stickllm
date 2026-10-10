@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>StickLLM</title>
-  <link rel="stylesheet" href="style.css?v=9" />
+  <link rel="stylesheet" href="style.css?v=10" />
 </head>
 <body>
   <header class="top">
@@ -12,6 +12,7 @@
     <div class="meta">
       <button type="button" id="modelsBtn" class="linkBtn" title="Models & storage">Models</button>
       <button type="button" id="pairBtn" class="linkBtn" title="Pair with stick">Pair</button>
+      <button type="button" id="revokeBtn" class="linkBtn" title="Revoke pair and mint a new code on the stick screen" hidden>Disconnect</button>
       <label class="webToggle" title="Look up live web results when needed">
         <input type="checkbox" id="webToggle" checked />
         Web
@@ -71,14 +72,21 @@
   <main id="log" class="log" aria-live="polite"></main>
 
   <form id="composer" class="composer">
-    <textarea id="input" rows="2" placeholder="Ask anything (pair first if prompted)" autocomplete="off"></textarea>
-    <button type="submit" id="send">Send</button>
+    <div id="attachBar" class="attachBar" hidden></div>
+    <div class="composerRow">
+      <label class="attachBtn" title="Attach image (vision models)">
+        <input type="file" id="imageInput" accept="image/*" multiple hidden />
+        Image
+      </label>
+      <textarea id="input" rows="2" placeholder="Ask anything — paste or attach images for vision models" autocomplete="off"></textarea>
+      <button type="submit" id="send">Send</button>
+    </div>
   </form>
 
   <footer class="foot">
-    Paired LAN client · API <code id="apiHint">/v1</code> · reboot clears pair + session
+    Paired LAN client · API <code id="apiHint">/v1</code> · Disconnect or reboot clears pair
   </footer>
 
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>

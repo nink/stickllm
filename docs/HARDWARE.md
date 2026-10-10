@@ -13,7 +13,7 @@
 | USB stick | **16 GB** OK for base; **32–64 GB** recommended so first-boot can claim free space as `STICKLLM-DATA` for model downloads |
 | Network | Optional LAN for phone clients; needed for model upgrades |
 
-Default baked model today: **Qwen2.5-7B Instruct Q5_K_M** (text). First boot claims USB free space; catalog-pinned downloads verify SHA-256.
+Default bake: **Qwen2.5-VL-3B + mmproj** (GPU) and **Qwen2.5-3B** (CPU). Preferred on ≥20 GB VRAM: **Qwen3.8-27B + mmproj** (download). 7B is download-only. First boot claims USB free space; catalog-pinned downloads verify SHA-256.
 
 ## Target model tiers (by VRAM)
 

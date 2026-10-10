@@ -67,24 +67,22 @@ StickLLM stays on the **Qwen** family only (no Moondream / SmolVLM / random merg
 
 | Host | What we ship / offer |
 |---|---|
-| **CPU / no usable VRAM** | **Text-only** Qwen (lite). **No mmproj** — vision not offered. |
-| **~8 GB+ NVIDIA VRAM** | Qwen text and/or **Qwen2.5-VL** (GGUF + mmproj) when pinned |
-| **16–24 GB** | Qwen **3.8** line; optimum **27B + vision** when pinned |
+| **CPU / no usable VRAM** | **Qwen2.5-3B** text (baked). **No mmproj**. |
+| **~6–19 GB NVIDIA VRAM** | Baked **Qwen2.5-VL-3B + mmproj**; optional 7B text download |
+| **≥20 GB VRAM** | Prefer **Qwen3.8-27B Q4_K_M + mmproj** (download); else VL-3B |
 
-- **Lite / small VRAM / RAM:** Qwen **3.5** text (base stick target)  
-- **Small vision (optional upgrade / later base on GPU sticks):** **Qwen2.5-VL-3B** + mmproj — only if VRAM allows  
-- **Larger VRAM (16–24 GB):** Qwen **3.8** line  
-- **Optimum on 24 GB (RTX 3090):** **Qwen3.8-27B Q4_K_M + vision (mmproj)** — downloaded, not baked into the cheap stick  
+Boot picker (`stickllm-select-model`): restore **last model** from `STICKLLM-DATA/etc/stickllm/last-model.json` when still installed and VRAM fits → else 27B+mmproj if installed and VRAM ≥ 20 → else VL-3B if VRAM ≥ 6 → else 3B text.  
+Activate/download writes that last-model file. **Qwen2.5-7B** is catalog download only (no longer baked).
 
-Rule: **never load or advertise mmproj on RAM-only / failsafe paths.**
+Rule: **never load mmproj on RAM-only / failsafe paths.**
 
 | Tier | Hardware | Target model (Qwen) | Quant (typical) | Approx size | Notes |
 |---|---|---|---|---|---|
-| **RAM-only** | No usable GPU / CUDA failed | Qwen3.5 tiny/small instruct | Q4_K_M | ~1–3 GB | Baked into base ISO |
-| **8 GB** | 8 GB VRAM | Qwen3.5 ~7–8B class | Q4_K_M / Q5_K_M | ~4–6 GB | Fits 16 GB stick after download |
-| **12 GB** | 12 GB VRAM | Qwen3.5 ~14B class | Q4_K_M | ~8–10 GB | Needs ~32 GB stick or host cache |
-| **16 GB** | 16 GB VRAM | Qwen3.8 mid / 27B IQ4_XS | Q4 / IQ4_XS | ~12–15 GB | 32–64 GB stick or SSD cache |
-| **24 GB** | RTX 3090 class | **Qwen3.8-27B + vision** | **Q4_K_M** + mmproj | ~15–18 GB + ~1 GB | Highlighted when VRAM ≥ 24 and space allows |
+| **RAM-only** | No usable GPU / CUDA failed | Qwen2.5-3B instruct | Q4_K_M | ~2 GB | Baked into base ISO |
+| **8 GB** | 8 GB VRAM | Qwen2.5-VL-3B + mmproj | Q4_K_M + Q8 mmproj | ~2.8 GB | Baked vision default |
+| **12 GB** | 12 GB VRAM | VL-3B (or 7B download) | — | — | 7B optional text |
+| **16–20 GB** | Mid VRAM | VL-3B until 27B fits | — | — | 27B needs ~20 GB+ |
+| **24 GB** | RTX 3090 class | **Qwen3.8-27B + vision** | **Q4_K_M** + f16 mmproj | ~17.4 + ~0.9 GB | Preferred; download to USB DATA |
 
 Exact filenames and hashes go in `config/models/catalog.toml` when pinned.
 

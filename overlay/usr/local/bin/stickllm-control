@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
@@ -16,7 +18,9 @@ CATALOG = Path(os.environ.get("STICKLLM_CATALOG", "/etc/stickllm/models/catalog.
 MNT = Path(os.environ.get("STICKLLM_DATA_MNT", "/mnt/stickllm-data"))
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("STICKLLM_CONTROL_PORT", "8091"))
-BAKED_7B = Path("/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf")
+BAKED_VL = Path("/opt/stickllm/models/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf")
+BAKED_VL_MMPROJ = Path("/opt/stickllm/models/mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf")
+BAKED_3B = Path("/opt/stickllm/models/qwen2.5-3b-instruct-q4_k_m.gguf")
 
 
 def sh(cmd: list[str], timeout: int = 600) -> dict:
@@ -91,9 +95,82 @@ def active_model_path() -> str:
             return str(cur.resolve())
         except Exception:
             pass
-    if BAKED_7B.is_file():
-        return str(BAKED_7B)
+    if BAKED_VL.is_file():
+        return str(BAKED_VL)
+    if BAKED_3B.is_file():
+        return str(BAKED_3B)
     return ""
+
+
+def split_hf_files(files: list[str]) -> tuple[str | None, str | None]:
+    main = None
+    mmproj = None
+    for f in files:
+        if "mmproj" in f.lower():
+            if mmproj is None:
+                mmproj = f
+        elif main is None:
+            main = f
+    return main, mmproj
+
+
+def last_model_path() -> Path:
+    return MNT / "etc" / "stickllm" / "last-model.json"
+
+
+def save_last_model(model_id: str, name: str = "") -> None:
+    """Remember active model on STICKLLM-DATA so reboot restores it when VRAM still fits."""
+    if not model_id:
+        return
+    try:
+        if not os.path.ismount(str(MNT)):
+            return
+        dest = last_model_path()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(
+            json.dumps(
+                {
+                    "id": model_id,
+                    "name": name or model_id,
+                    "updated": int(time.time()),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def write_model_env(
+    model_path: str,
+    mmproj_path: str = "",
+    model_id: str = "",
+    name: str = "",
+    n_gpu_layers: int | None = None,
+) -> None:
+    vram = detect_vram_gb()
+    if n_gpu_layers is None:
+        n_gpu_layers = 0 if vram < 0.5 else 999
+    if vram < 0.5:
+        mmproj_path = ""
+    RUN.mkdir(parents=True, exist_ok=True)
+    (RUN / "model.env").write_text(
+        "\n".join(
+            [
+                f"STICKLLM_MODEL={shlex.quote(model_path)}",
+                f"STICKLLM_MMPROJ={shlex.quote(mmproj_path)}",
+                f"STICKLLM_N_GPU_LAYERS={int(n_gpu_layers)}",
+                f"STICKLLM_MODEL_ID={shlex.quote(model_id)}",
+                f"STICKLLM_MODEL_NAME={shlex.quote(name)}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if model_id:
+        save_last_model(model_id, name)
 
 
 def parse_catalog() -> list[dict]:
@@ -114,12 +191,6 @@ def parse_catalog() -> list[dict]:
         repo = g("hf_repo", "")
         fm = re.search(r"^hf_files\s*=\s*\[(.*?)\]", b, re.M | re.S)
         files = re.findall(r'"([^"]*)"', fm.group(1)) if fm else []
-        # Baked 7B may have no need to re-download but is installed
-        if mid == "qwen25-7b-q5km" and not files:
-            files = [
-                "qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf",
-                "qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf",
-            ]
         out.append(
             {
                 "id": mid,
@@ -148,24 +219,37 @@ def enrich_models(vram_gb: float | None = None) -> list[dict]:
         files = m.get("hf_files") or []
         paths = [find_file(f) for f in files] if files else []
         installed = bool(files) and all(p is not None for p in paths)
-        # Also treat baked single-file presence
-        if not installed and m["id"] == "qwen25-7b-q5km" and BAKED_7B.is_file():
+        if not installed and m["id"] == "qwen25-vl-3b-q4km" and BAKED_VL.is_file() and BAKED_VL_MMPROJ.is_file():
             installed = True
-            paths = [BAKED_7B]
-        first = next((str(p) for p in paths if p), "")
+            paths = [BAKED_VL, BAKED_VL_MMPROJ]
+        if not installed and m["id"] == "qwen25-3b-q4km" and BAKED_3B.is_file():
+            installed = True
+            paths = [BAKED_3B]
+        main_name, mmproj_name = split_hf_files(files)
+        main_path = find_file(main_name) if main_name else None
+        mmproj_path = find_file(mmproj_name) if mmproj_name else None
+        if m["id"] == "qwen25-vl-3b-q4km" and BAKED_VL.is_file():
+            main_path = main_path or BAKED_VL
+            mmproj_path = mmproj_path or (BAKED_VL_MMPROJ if BAKED_VL_MMPROJ.is_file() else None)
+        if m["id"] == "qwen25-3b-q4km" and BAKED_3B.is_file():
+            main_path = main_path or BAKED_3B
+        first = str(main_path) if main_path else (next((str(p) for p in paths if p), ""))
         fits = vram_gb + 0.01 >= float(m.get("min_vram_gb") or 0)
         # CPU/RAM: allow min_vram 0 even with no GPU
         if float(m.get("min_vram_gb") or 0) == 0:
             fits = True
-        runnable = installed and fits
+        # Vision models need GPU VRAM — hide runnable on CPU hosts
+        if m.get("vision") and vram_gb < 0.5:
+            fits = False
+        runnable = installed and fits and bool(first)
+        if m.get("vision") and installed and not mmproj_path:
+            runnable = False
         is_active = False
         if active and first:
             try:
                 is_active = Path(active).resolve() == Path(first).resolve()
             except Exception:
                 is_active = os.path.basename(active) == os.path.basename(first)
-        elif active and m["id"] == "qwen25-7b-q5km" and "qwen2.5-7b" in active:
-            is_active = True
         m.update(
             {
                 "installed": installed,
@@ -173,6 +257,7 @@ def enrich_models(vram_gb: float | None = None) -> list[dict]:
                 "active": is_active,
                 "fits_vram": fits,
                 "path": first,
+                "mmproj": str(mmproj_path) if mmproj_path else "",
                 "vram_gb": round(vram_gb, 1),
             }
         )
@@ -401,8 +486,11 @@ def activate_model(model_id: str) -> dict:
     path = m.get("path") or ""
     if not path or not Path(path).is_file():
         return {"ok": False, "error": "model file missing"}
+    mmproj = m.get("mmproj") or ""
+    if m.get("vision") and (not mmproj or not Path(mmproj).is_file()):
+        return {"ok": False, "error": "vision mmproj missing"}
     RUN.mkdir(parents=True, exist_ok=True)
-    (RUN / "model.env").write_text(f"STICKLLM_MODEL={path}\n", encoding="utf-8")
+    write_model_env(path, mmproj, model_id, m.get("name", model_id))
     (RUN / "load-phase.txt").write_text("loading\n", encoding="utf-8")
     (RUN / "load-model.txt").write_text(f"{model_id}\n{m.get('name', model_id)}\n", encoding="utf-8")
     try:

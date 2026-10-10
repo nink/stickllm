@@ -1,6 +1,6 @@
 [Unit]
-Description=StickLLM local console chat (this PC screen/keyboard)
-ConditionKernelCommandLine=stickllm.local
+Description=StickLLM local console chat (CLI — stickllm.cli)
+ConditionKernelCommandLine=stickllm.cli
 After=stickllm-llama.service stickllm-ui.service stickllm-bootstatus.service stickllm-console-setup.service
 Wants=stickllm-llama.service stickllm-ui.service
 Conflicts=getty@tty1.service

@@ -15,34 +15,47 @@ echo
 
 if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null || echo "nvidia-smi: error"
+  if [[ -f /run/stickllm/cuda.env ]]; then
+    echo "cuda.env: $(tr '\n' ' ' </run/stickllm/cuda.env)"
+  fi
 else
   echo "nvidia-smi: not found"
 fi
 echo
 
-MODEL="/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
-if [[ -f "$MODEL" ]]; then
-  echo "model:    present ($(du -h "$MODEL" | awk '{print $1}'))"
+MODEL=""
+if [[ -f /run/stickllm/model.env ]]; then
+  # shellcheck disable=SC1091
+  source /run/stickllm/model.env || true
+  MODEL="${STICKLLM_MODEL:-}"
+fi
+if [[ -z "$MODEL" ]]; then
+  for c in \
+    /opt/stickllm/models/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf \
+    /opt/stickllm/models/qwen2.5-3b-instruct-q4_k_m.gguf; do
+    [[ -f "$c" ]] && MODEL="$c" && break
+  done
+fi
+if [[ -n "$MODEL" && -f "$MODEL" ]]; then
+  echo "model:    ${STICKLLM_MODEL_NAME:-$(basename "$MODEL")} ($(du -h "$MODEL" | awk '{print $1}'))"
 else
-  echo "model:    MISSING — run stickllm-download-model (explicit)"
+  echo "model:    MISSING — use Models menu or stickllm-download-model"
 fi
 
 echo "llama:    $(systemctl is-active stickllm-llama.service 2>/dev/null || echo unknown)"
 echo "ui:       $(systemctl is-active stickllm-ui.service 2>/dev/null || echo unknown)"
-echo
-
 echo "tls:      $(systemctl is-active stickllm-tls.service 2>/dev/null || echo unknown)"
-echo "webui:    $(systemctl is-active stickllm-openwebui.service 2>/dev/null || echo inactive)"
-echo "frontend: ${STICKLLM_CHAT_FRONTEND:-auto}"
+echo "kiosk:    $(systemctl is-active stickllm-kiosk.service 2>/dev/null || echo inactive)"
+echo "frontend: native"
+echo "local_trust: ${STICKLLM_LOCAL_TRUST:-1}"
 echo
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [[ -n "${IP:-}" ]]; then
-  echo "Chat UI:  https://${IP}/"
+  echo "Chat UI:  https://${IP}/  (LAN: pair code required)"
   echo "API:      https://${IP}/v1/chat/completions"
-  echo "Models:   https://${IP}/stickllm/"
 else
-  echo "Chat UI:  https://127.0.0.1/"
+  echo "Chat UI:  https://127.0.0.1/  (same-box: no pair)"
   echo "API:      https://127.0.0.1/v1/chat/completions"
 fi
 if [[ -f /var/lib/stickllm/tls/cert.pem ]]; then

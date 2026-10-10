@@ -8,17 +8,21 @@ MNT="${STICKLLM_DATA_MNT:-/mnt/stickllm-data}"
 STATUS_DIR="${STICKLLM_RUN:-/run/stickllm}"
 AUTO=0
 YES=0
+RECREATE=0
 
 usage() {
-  echo "Usage: sudo stickllm-usb-claim [--auto] [--yes]"
-  echo "  --auto  non-interactive: mount existing DATA, or create in free space on boot USB"
-  echo "  --yes   skip typed confirm (still requires --auto or interactive confirm)"
+  echo "Usage: sudo stickllm-usb-claim [--auto] [--yes] [--recreate-data]"
+  echo "  --auto           non-interactive: mount existing DATA, or create in free space on boot USB"
+  echo "  --yes            skip typed confirm (still requires --auto or interactive confirm)"
+  echo "  --recreate-data  wipe+reformat existing $LABEL (requires --yes). Use only if journal is corrupt"
+  echo "                   and you accept losing models/vault on that partition."
 }
 
 for a in "$@"; do
   case "$a" in
     --auto) AUTO=1 ;;
     --yes|--i-understand) YES=1 ;;
+    --recreate-data) RECREATE=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown arg: $a"; usage; exit 2 ;;
   esac
@@ -62,13 +66,50 @@ part_path() {
 # Prefer existing labeled partition anywhere removable
 EXISTING="$(blkid -L "$LABEL" 2>/dev/null || true)"
 if [[ -n "$EXISTING" ]]; then
-  if ! findmnt -n "$MNT" >/dev/null 2>&1; then
+  DISK="$(lsblk -no PKNAME "$EXISTING" 2>/dev/null | head -1)"
+
+  if [[ "$RECREATE" -eq 1 ]]; then
+    if [[ "$YES" -ne 1 ]]; then
+      echo "Refusing --recreate-data without --yes (would wipe $EXISTING)."
+      exit 1
+    fi
+    echo "Recreating $LABEL on $EXISTING (all data on that partition will be lost)…"
+    umount "$EXISTING" 2>/dev/null || true
+    umount "$MNT" 2>/dev/null || true
+    mkfs.ext4 -F -L "$LABEL" "$EXISTING"
     mount "$EXISTING" "$MNT"
+    mkdir -p "$MNT/models" "$MNT/vault" "$MNT/etc/stickllm"
+    cat >"$MNT/README.txt" <<'EOF'
+StickLLM data partition (v0.2)
+- models/  verified GGUF downloads (hash-checked against USB catalog)
+- vault/   optional encrypted context (off by default)
+EOF
+    sync
+    FREE_KB="$(df -Pk "$MNT" | awk 'NR==2{print $4}')"
+    FREE_GB="$(awk -v k="$FREE_KB" 'BEGIN{printf "%.1f", k/1024/1024}')"
+    write_status true "$FREE_GB" "${DISK:-unknown}" "Recreated and mounted $LABEL"
+    echo "Done. Recreated $LABEL at $MNT (${FREE_GB} GiB free)."
+    exit 0
+  fi
+
+  if ! findmnt -n "$MNT" >/dev/null 2>&1; then
+    if ! mount "$EXISTING" "$MNT" 2>/tmp/stickllm-mount.err; then
+      echo "Mount of $EXISTING failed; attempting safe journal repair (e2fsck -p)…"
+      # -p: automatic repair of safe problems only (no wipe).
+      e2fsck -p "$EXISTING" >/tmp/stickllm-e2fsck.out 2>&1 || true
+      if ! mount "$EXISTING" "$MNT" 2>/tmp/stickllm-mount2.err; then
+        note="STICKLLM-DATA present but unmountable (corrupt journal). Data NOT wiped. Repair: sudo e2fsck -y $EXISTING && mount $EXISTING $MNT — or recreate empty: sudo stickllm-usb-claim --recreate-data --yes"
+        write_status false 0 "${DISK:-unknown}" "$note"
+        echo "$note"
+        cat /tmp/stickllm-mount2.err 2>/dev/null || cat /tmp/stickllm-mount.err 2>/dev/null || true
+        exit 1
+      fi
+      echo "Mounted after e2fsck -p."
+    fi
   fi
   mkdir -p "$MNT/models" "$MNT/vault" "$MNT/etc/stickllm"
   FREE_KB="$(df -Pk "$MNT" | awk 'NR==2{print $4}')"
   FREE_GB="$(awk -v k="$FREE_KB" 'BEGIN{printf "%.1f", k/1024/1024}')"
-  DISK="$(lsblk -no PKNAME "$EXISTING" 2>/dev/null | head -1)"
   write_status true "$FREE_GB" "${DISK:-unknown}" "Mounted existing $LABEL"
   echo "Mounted $EXISTING → $MNT (${FREE_GB} GiB free)"
   exit 0

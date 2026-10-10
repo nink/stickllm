@@ -1,7 +1,7 @@
 [Unit]
 Description=StickLLM chat UI + web gateway (HTTPS :443, HTTP→HTTPS :80)
-After=network-online.target stickllm-llama.service stickllm-control.service stickllm-tls.service
-Wants=network-online.target stickllm-control.service stickllm-tls.service
+After=network.target stickllm-llama.service stickllm-control.service stickllm-tls.service
+Wants=stickllm-control.service stickllm-tls.service
 
 [Service]
 Type=simple
@@ -14,8 +14,8 @@ Environment=STICKLLM_HTTP_PORT=80
 Environment=STICKLLM_TLS=1
 Environment=STICKLLM_TLS_CERT=/var/lib/stickllm/tls/cert.pem
 Environment=STICKLLM_TLS_KEY=/var/lib/stickllm/tls/key.pem
-Environment=STICKLLM_CHAT_FRONTEND=auto
-Environment=STICKLLM_OPENWEBUI_URL=http://127.0.0.1:8081
+Environment=STICKLLM_CHAT_FRONTEND=native
+Environment=STICKLLM_LOCAL_TRUST=1
 ExecStartPre=/usr/local/bin/stickllm-tls
 ExecStart=/usr/local/bin/stickllm-gateway
 Restart=on-failure

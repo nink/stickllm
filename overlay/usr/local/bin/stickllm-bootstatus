@@ -10,12 +10,44 @@ API="${STICKLLM_API:-http://127.0.0.1:8080}"
 UI="${STICKLLM_UI:-http://127.0.0.1/}"
 UI_TLS="${STICKLLM_UI_TLS:-https://127.0.0.1/}"
 RUN="${STICKLLM_RUN:-/run/stickllm}"
-MODEL_PATH="/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
-MODEL_NAME="Qwen2.5-7B Instruct Q5_K_M (baked)"
+MODEL_PATH="/opt/stickllm/models/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+MODEL_NAME="Qwen2.5-VL-3B (baked vision)"
 LOG="$RUN/bootstatus.log"
+
+refresh_model_label() {
+  local envf="$RUN/model.env"
+  if [[ -f "$envf" ]]; then
+    # shellcheck disable=SC1090
+    set -a
+    # shellcheck source=/dev/null
+    . "$envf" 2>/dev/null || true
+    set +a
+    if [[ -n "${STICKLLM_MODEL_NAME:-}" ]]; then
+      MODEL_NAME="$STICKLLM_MODEL_NAME"
+    fi
+    if [[ -n "${STICKLLM_MODEL:-}" && -f "${STICKLLM_MODEL}" ]]; then
+      MODEL_PATH="$STICKLLM_MODEL"
+    fi
+  fi
+  if [[ ! -f "$MODEL_PATH" ]]; then
+    if [[ -f /opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf ]]; then
+      MODEL_PATH="/opt/stickllm/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
+      MODEL_NAME="Qwen2.5-7B (baked)"
+    elif [[ -f /opt/stickllm/models/qwen2.5-3b-instruct-q4_k_m.gguf ]]; then
+      MODEL_PATH="/opt/stickllm/models/qwen2.5-3b-instruct-q4_k_m.gguf"
+      MODEL_NAME="Qwen2.5-3B (baked CPU)"
+    fi
+  fi
+}
+refresh_model_label
 
 mkdir -p "$RUN"
 touch "$LOG"
+# Local UI kiosk owns tty1 — do not fight cage/Chromium for the console.
+if grep -Eqw 'stickllm\.(kiosk|local)' /proc/cmdline 2>/dev/null; then
+  echo "bootstatus: local UI mode — yielding tty1" >>"$LOG"
+  exit 0
+fi
 # Immediate breadcrumb even if later logic breaks (visible in journal + tty).
 echo "bootstatus: starting pid=$$" | tee -a "$LOG" >>"$TTY" 2>/dev/null || true
 
@@ -29,7 +61,11 @@ mode="lan"
 mode_label="LAN Server (phone/browser chat)"
 grep -qw 'stickllm.local' /proc/cmdline 2>/dev/null && {
   mode="local"
-  mode_label="Local (chat on this keyboard)"
+  mode_label="Local (browser on this screen — no pair)"
+}
+grep -qw 'stickllm.kiosk' /proc/cmdline 2>/dev/null && {
+  mode="local"
+  mode_label="Local (browser on this screen — no pair)"
 }
 grep -qw 'stickllm.ssh' /proc/cmdline 2>/dev/null && {
   mode="ssh"
@@ -63,7 +99,10 @@ say() {
 detect_phase() {
   local ui_ok="$1" api_ok="$2"
 
-  if [[ ! -f "$MODEL_PATH" ]]; then
+  refresh_model_label
+  if [[ ! -f "$MODEL_PATH" ]] && \
+     [[ ! -f /opt/stickllm/models/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf ]] && \
+     [[ ! -f /opt/stickllm/models/qwen2.5-3b-instruct-q4_k_m.gguf ]]; then
     echo "Waiting for baked model files…"
     return
   fi
@@ -124,6 +163,7 @@ usb_line() {
 
 draw_header() {
   local title="$1"
+  refresh_model_label
   say ""
   say "========================================"
   say "  ${title}"

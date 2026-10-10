@@ -11,15 +11,16 @@ cd "$ROOT"
 
 PROFILE="amd-rtx3090"
 ISO_NAME="stickllm-${PROFILE}.hybrid.iso"
-MODEL_SHARD1="qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
-MODEL_SHARD2="qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf"
+MODEL_VL="Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+MODEL_VL_MMPROJ="mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf"
+MODEL_3B="qwen2.5-3b-instruct-q4_k_m.gguf"
 VOL_WORK="stickllm-lb-work"
 
 echo "=== StickLLM build (${PROFILE}) ==="
 ./scripts/verify-host.sh
 
-if [[ ! -f "models/${MODEL_SHARD1}" || ! -f "models/${MODEL_SHARD2}" ]]; then
-  echo "Model shards missing — fetching…"
+if [[ ! -f "models/${MODEL_VL}" || ! -f "models/${MODEL_VL_MMPROJ}" || ! -f "models/${MODEL_3B}" ]]; then
+  echo "Baked model files missing — fetching…"
   ./scripts/download-model.sh
 fi
 

@@ -1,5 +1,8 @@
 #!/bin/bash
 # Ensure live user can log in (console + SSH) with a known ephemeral password.
+# CRITICAL: never systemctl daemon-reload here — mid-boot reload cancels the
+# pending stickllm-bootstatus job (v0.2.1 regression) and leaves the systemd
+# splash stuck on NetworkManager forever with no pair code on tty1.
 set -euo pipefail
 
 if ! getent passwd user >/dev/null 2>&1; then
@@ -27,17 +30,17 @@ cat >/etc/motd <<'EOF'
 
 EOF
 
+# Quiet kernel spam on the console so EXT4/USB noise does not bury the pair code.
+sysctl -w kernel.printk="3 4 1 3" >/dev/null 2>&1 || true
+dmesg -n err >/dev/null 2>&1 || true
+
+# Drop plymouth / splash so tty1 pair paint is visible.
+plymouth quit --wait >/dev/null 2>&1 || true
+
 # Term/local keyboard login on tty2 — tty1 is owned by bootstatus (pair code).
 systemctl enable getty@tty2.service 2>/dev/null || true
 systemctl start getty@tty2.service 2>/dev/null || true
-mkdir -p /etc/systemd/system/getty@tty1.service.d
-cat >/etc/systemd/system/getty@tty1.service.d/stickllm-conflict.conf <<'EOF'
-[Unit]
-# Server/Local/Term: stickllm-bootstatus owns tty1 for progress + pair code.
-ConflictedBy=stickllm-bootstatus.service
-EOF
-# Drop-in only applies after reload; without this getty can keep tty1.
-systemctl daemon-reload 2>/dev/null || true
+# getty@tty1 gated by overlay drop-in ConditionPathExists=/run/stickllm/allow-getty-tty1
 systemctl stop getty@tty1.service 2>/dev/null || true
-# Do not start bootstatus here — it After= this unit; starting it from
-# ExecStart would deadlock waiting for console-setup to finish.
+# Re-queue bootstatus (idempotent). --no-block so this oneshot can exit.
+systemctl start --no-block stickllm-bootstatus.service 2>/dev/null || true
